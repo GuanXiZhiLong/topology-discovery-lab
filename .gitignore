@@ -1,0 +1,51 @@
+# Local Codex rules and role notes
+AGENTS.md
+docs/CODEX_*.md
+
+# Local configuration and secrets
+config/config.yaml
+config/*.local.yaml
+config/*secret*.yaml
+.env
+.env.*
+*.pem
+*.key
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Logs and runtime files
+*.log
+logs/
+tmp/
+temp/
+
+# Local database/runtime data
+data/
+neo4j-data/
+neo4j-logs/
+
+# IDE and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
