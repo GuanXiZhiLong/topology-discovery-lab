@@ -108,6 +108,18 @@ ssh:
 2. 当前阶段可以整体写入失败，不需要复杂部分提交恢复。
 3. 未来可扩展为分批写入和失败恢复。
 
+## 多网段扫描可靠性
+
+多个扫描目标同时存在时，应遵守：
+
+1. 多个 target 展开后的 IP 必须去重，避免重叠网段导致重复探测。
+2. 同一 IP 属于多个 target 时，应记录所有来源 target。
+3. 单个 target 扫描失败不应影响其他 target。
+4. 单个 IP 探测失败不应影响同一 target 或其他 target。
+5. 重叠网段不应导致重复创建设备、接口或链路。
+6. 网段归属关系可以有多个，但必须使用 `MERGE` 保证重复扫描不重复创建。
+7. `TopologySnapshot` 应记录本次扫描的原始 target 列表，便于排查部分失败和归属统计。
+
 ## 幂等要求
 
 Neo4j 写入必须尽量幂等：
@@ -115,5 +127,7 @@ Neo4j 写入必须尽量幂等：
 1. 设备使用 `MERGE (d:Device {device_id: $device_id})`。
 2. 接口使用 `MERGE (i:Interface {interface_id: $interface_id})`。
 3. 链路使用稳定 `link_id`。
-4. 重复扫描更新属性，不重复创建。
-5. 使用 `last_seen` 表示最近发现时间。
+4. 网段使用 `MERGE (s:NetworkSegment {segment_id: $segment_id})`。
+5. 设备和网段关系使用 `MERGE`。
+6. 重复扫描更新属性，不重复创建。
+7. 使用 `last_seen` 表示最近发现时间。
