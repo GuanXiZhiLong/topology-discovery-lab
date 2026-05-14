@@ -48,6 +48,35 @@ class AliveHost(DiscoveryBaseModel):
         return value
 
 
+class SnmpInterfaceInfo(DiscoveryBaseModel):
+    """Raw interface information collected through SNMP."""
+
+    if_index: int
+    name: str | None = None
+    mac_address: str | None = None
+    admin_status: str | None = None
+    oper_status: str | None = None
+    speed_bps: int | None = None
+
+
+class SnmpDeviceInfo(DiscoveryBaseModel):
+    """Raw device information collected through SNMP."""
+
+    ip: str
+    success: bool
+    sys_name: str | None = None
+    sys_descr: str | None = None
+    sys_object_id: str | None = None
+    interfaces: list[SnmpInterfaceInfo] = Field(default_factory=list)
+    error: str | None = None
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, value: str) -> str:
+        ip_address(value)
+        return value
+
+
 class DeviceNode(DiscoveryBaseModel):
     """A network device node in a topology snapshot."""
 

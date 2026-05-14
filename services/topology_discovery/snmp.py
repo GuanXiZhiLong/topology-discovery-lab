@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import Field
 from pysnmp.hlapi.asyncio import (
     CommunityData,
     ContextData,
@@ -19,7 +18,7 @@ from pysnmp.hlapi.asyncio import (
 )
 
 from services.topology_discovery.config import SnmpConfig
-from services.topology_discovery.models import AliveHost, DiscoveryBaseModel
+from services.topology_discovery.models import AliveHost, SnmpDeviceInfo, SnmpInterfaceInfo
 
 SYS_DESCR_OID = "1.3.6.1.2.1.1.1.0"
 SYS_OBJECT_ID_OID = "1.3.6.1.2.1.1.2.0"
@@ -37,29 +36,6 @@ SnmpWalk = Callable[[str, SnmpConfig, str], dict[str, str]]
 
 class SnmpError(RuntimeError):
     """Raised when a low-level SNMP operation fails."""
-
-
-class SnmpInterfaceInfo(DiscoveryBaseModel):
-    """Raw interface information collected through SNMP."""
-
-    if_index: int
-    name: str | None = None
-    mac_address: str | None = None
-    admin_status: str | None = None
-    oper_status: str | None = None
-    speed_bps: int | None = None
-
-
-class SnmpDeviceInfo(DiscoveryBaseModel):
-    """Raw device information collected through SNMP."""
-
-    ip: str
-    success: bool
-    sys_name: str | None = None
-    sys_descr: str | None = None
-    sys_object_id: str | None = None
-    interfaces: list[SnmpInterfaceInfo] = Field(default_factory=list)
-    error: str | None = None
 
 
 def collect_snmp_device_info(
