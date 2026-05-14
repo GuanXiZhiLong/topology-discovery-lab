@@ -1,0 +1,30 @@
+scan:
+  targets:
+    - "192.0.2.0/24"
+  timeout_seconds: 2
+  retry_count: 1
+  max_concurrency: 64
+
+snmp:
+  enabled: true
+  version: "2c"
+  community: "dummy-community"
+  timeout_seconds: 2
+  retry_count: 1
+  port: 161
+
+ssh:
+  enabled: false
+  username: ""
+  password: ""
+  timeout_seconds: 5
+  port: 22
+  commands:
+    show_version: "show version"
+    show_lldp_neighbors: "show lldp neighbors detail"
+
+neo4j:
+  uri: "bolt://localhost:7687"
+  username: "neo4j"
+  password: "dummy-password"
+  database: "neo4j"
