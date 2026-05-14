@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from ipaddress import ip_address, ip_network
 
 from services.topology_discovery.models import (
     AliveHost,
@@ -10,6 +11,7 @@ from services.topology_discovery.models import (
     DeviceType,
     DiscoveryError,
     InterfaceNode,
+    NetworkSegmentNode,
     SnmpDeviceInfo,
     SnmpInterfaceInfo,
     SshDeviceInfo,
@@ -21,11 +23,13 @@ def build_topology_snapshot(
     alive_hosts: list[AliveHost],
     snmp_results: list[SnmpDeviceInfo],
     ssh_results: list[SshDeviceInfo] | None = None,
+    scan_targets: list[str] | None = None,
 ) -> TopologySnapshot:
     """Build a topology snapshot from protocol collection results."""
 
     started_at = datetime.now(UTC)
     resolved_ssh_results = ssh_results or []
+    resolved_scan_targets = scan_targets or _scan_targets_from_alive_hosts(alive_hosts)
     devices = _deduplicate_devices(
         [
             *_devices_from_alive_hosts(alive_hosts, started_at),
@@ -49,11 +53,13 @@ def build_topology_snapshot(
 
     return TopologySnapshot(
         snapshot_id=f"snapshot:{started_at.isoformat()}",
+        scan_targets=resolved_scan_targets,
         started_at=started_at,
         finished_at=finished_at,
         devices=devices,
         interfaces=interfaces,
         links=[],
+        network_segments=_network_segments_from_targets(resolved_scan_targets, started_at),
         errors=errors,
     )
 
@@ -179,6 +185,38 @@ def _deduplicate_interfaces(interfaces: list[InterfaceNode]) -> list[InterfaceNo
     return list(by_interface_id.values())
 
 
+def _network_segments_from_targets(
+    scan_targets: list[str],
+    last_seen: datetime,
+) -> list[NetworkSegmentNode]:
+    segments: list[NetworkSegmentNode] = []
+    seen: set[str] = set()
+    for target in scan_targets:
+        normalized_target = _normalize_target(target)
+        if normalized_target in seen:
+            continue
+        seen.add(normalized_target)
+        segments.append(
+            NetworkSegmentNode(
+                segment_id=f"segment:{normalized_target}",
+                target=normalized_target,
+                cidr=_target_cidr(normalized_target),
+                source="config",
+                last_seen=last_seen,
+            )
+        )
+    return segments
+
+
+def _scan_targets_from_alive_hosts(alive_hosts: list[AliveHost]) -> list[str]:
+    scan_targets: list[str] = []
+    for host in alive_hosts:
+        for target in host.source_targets:
+            if target not in scan_targets:
+                scan_targets.append(target)
+    return scan_targets
+
+
 def _identify_device_type(sys_descr: str | None) -> DeviceType:
     if not sys_descr:
         return "unknown"
@@ -209,3 +247,18 @@ def _device_priority(device: DeviceNode) -> int:
     if device.status == "partial":
         return 1
     return 0
+
+
+def _normalize_target(target: str) -> str:
+    try:
+        return str(ip_address(target))
+    except ValueError:
+        return str(ip_network(target, strict=False))
+
+
+def _target_cidr(target: str) -> str | None:
+    try:
+        ip_address(target)
+        return None
+    except ValueError:
+        return str(ip_network(target, strict=False))
