@@ -12,6 +12,8 @@ from services.topology_discovery.models import (
     DiscoveryError,
     InterfaceNode,
     LinkEdge,
+    SshCommandResult,
+    SshDeviceInfo,
     TopologySnapshot,
 )
 
@@ -107,6 +109,28 @@ def test_interface_node_accepts_valid_data() -> None:
 
     assert interface.if_index == 1
     assert interface.speed_bps == 1_000_000_000
+
+
+def test_ssh_device_info_accepts_command_results() -> None:
+    result = SshDeviceInfo(
+        ip="192.0.2.1",
+        success=True,
+        commands=[
+            SshCommandResult(
+                name="show_version",
+                command="show version",
+                success=True,
+                output="Example OS",
+            )
+        ],
+    )
+
+    assert result.commands[0].name == "show_version"
+
+
+def test_ssh_device_info_rejects_invalid_ip() -> None:
+    with pytest.raises(ValidationError):
+        SshDeviceInfo(ip="not-an-ip", success=False, error="ssh_request_failed")
 
 
 def test_link_edge_rejects_invalid_confidence() -> None:

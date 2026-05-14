@@ -77,6 +77,31 @@ class SnmpDeviceInfo(DiscoveryBaseModel):
         return value
 
 
+class SshCommandResult(DiscoveryBaseModel):
+    """Raw output collected from a single SSH command."""
+
+    name: str
+    command: str
+    success: bool
+    output: str | None = None
+    error: str | None = None
+
+
+class SshDeviceInfo(DiscoveryBaseModel):
+    """Raw supplemental information collected through SSH."""
+
+    ip: str
+    success: bool
+    commands: list[SshCommandResult] = Field(default_factory=list)
+    error: str | None = None
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, value: str) -> str:
+        ip_address(value)
+        return value
+
+
 class DeviceNode(DiscoveryBaseModel):
     """A network device node in a topology snapshot."""
 
