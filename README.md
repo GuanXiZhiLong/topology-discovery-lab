@@ -88,6 +88,7 @@ topology-discovery-lab/
 
 - `docs/ARCHITECTURE.md`：项目边界、技术栈、目录结构、模块职责。
 - `docs/DESIGN.md`：配置模型、数据模型、协议采集、拓扑解析、Neo4j 图模型。
+- `docs/CODE_STYLE.md`：代码风格、接口命名、变量命名、错误处理和测试命名。
 - `docs/RELIABILITY.md`：超时、重试、失败隔离、幂等写入。
 - `docs/SECURITY.md`：凭据安全、SNMP/SSH/Neo4j 安全、日志脱敏。
 - `docs/QUALITY_SCORE.md`：测试策略、质量标准、Review 检查清单。
@@ -112,12 +113,17 @@ config/config.yaml
 
 ## 本地开发
 
-建议使用 Python 3.11。
+本项目本地开发默认使用 conda，环境名与项目名一致：
+
+```text
+topology-discovery-lab
+```
 
 ```powershell
-python --version
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+conda create -n topology-discovery-lab python=3.11
+conda activate topology-discovery-lab
+python -c "import sys; print(sys.executable); print(sys.version)"
+python -m pip --version
 python -m pip install -U pip
 ```
 

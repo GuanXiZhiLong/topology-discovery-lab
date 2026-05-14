@@ -1,6 +1,7 @@
 # Local Codex rules and role notes
 AGENTS.md
 docs/CODEX_*.md
+reviews/
 
 # Local configuration and secrets
 config/config.yaml
