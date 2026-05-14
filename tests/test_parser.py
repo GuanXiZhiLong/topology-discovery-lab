@@ -122,38 +122,6 @@ def test_build_topology_snapshot_uses_timezone_aware_timestamps() -> None:
     assert snapshot.finished_at.tzinfo is not None
 
 
-def test_build_topology_snapshot_records_scan_targets_and_segments() -> None:
-    snapshot = build_topology_snapshot(
-        alive_hosts=[],
-        snmp_results=[],
-        scan_targets=["192.0.2.1", "192.0.2.0/30"],
-    )
-
-    assert snapshot.scan_targets == ["192.0.2.1", "192.0.2.0/30"]
-    assert [segment.segment_id for segment in snapshot.network_segments] == [
-        "segment:192.0.2.1",
-        "segment:192.0.2.0/30",
-    ]
-    assert snapshot.network_segments[0].cidr is None
-    assert snapshot.network_segments[1].cidr == "192.0.2.0/30"
-
-
-def test_build_topology_snapshot_derives_scan_targets_from_alive_hosts() -> None:
-    snapshot = build_topology_snapshot(
-        alive_hosts=[
-            AliveHost(
-                ip="192.0.2.1",
-                reachable=True,
-                discovered_by="icmp",
-                source_targets=["192.0.2.1", "192.0.2.0/30"],
-            )
-        ],
-        snmp_results=[],
-    )
-
-    assert snapshot.scan_targets == ["192.0.2.1", "192.0.2.0/30"]
-
-
 def _snmp_result(
     ip: str = "192.0.2.1",
     sys_descr: str = "Example Switch",

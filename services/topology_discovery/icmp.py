@@ -24,18 +24,13 @@ class Probe(Protocol):
 def expand_targets(targets: list[str]) -> list[str]:
     """Expand IP and CIDR scan targets into a de-duplicated IP list."""
 
-    return list(expand_target_sources(targets))
-
-
-def expand_target_sources(targets: list[str]) -> dict[str, list[str]]:
-    """Expand scan targets and keep all source targets for each IP."""
-
-    expanded: dict[str, list[str]] = {}
+    expanded: list[str] = []
+    seen: set[str] = set()
     for target in targets:
         for ip in _expand_target(target):
-            source_targets = expanded.setdefault(ip, [])
-            if target not in source_targets:
-                source_targets.append(target)
+            if ip not in seen:
+                expanded.append(ip)
+                seen.add(ip)
     return expanded
 
 
@@ -68,8 +63,7 @@ def probe_host(ip: str, timeout_seconds: float) -> AliveHost:
 def scan_alive_hosts(config: ScanConfig, probe: Probe = probe_host) -> list[AliveHost]:
     """Scan configured targets and return reachability results for each IP."""
 
-    target_sources = expand_target_sources(config.targets)
-    ips = list(target_sources)
+    ips = expand_targets(config.targets)
     results_by_ip: dict[str, AliveHost] = {}
     max_workers = min(config.max_concurrency, len(ips)) or 1
 
@@ -87,15 +81,13 @@ def scan_alive_hosts(config: ScanConfig, probe: Probe = probe_host) -> list[Aliv
         for future in as_completed(futures):
             ip = futures[future]
             try:
-                results_by_ip[ip] = _with_source_targets(future.result(), target_sources[ip])
+                results_by_ip[ip] = future.result()
             except Exception as exc:  # noqa: BLE001
                 results_by_ip[ip] = AliveHost(
                     ip=ip,
                     reachable=False,
                     latency_ms=None,
                     discovered_by="icmp",
-                    source_target=target_sources[ip][0],
-                    source_targets=target_sources[ip],
                     error=exc.__class__.__name__,
                 )
 
@@ -133,15 +125,6 @@ def _probe_with_retries(
             error="not_probed",
         )
     return last_result
-
-
-def _with_source_targets(host: AliveHost, source_targets: list[str]) -> AliveHost:
-    return host.model_copy(
-        update={
-            "source_target": source_targets[0],
-            "source_targets": source_targets,
-        }
-    )
 
 
 def _send_icmp_echo(ip: str, timeout_seconds: float) -> object | None:

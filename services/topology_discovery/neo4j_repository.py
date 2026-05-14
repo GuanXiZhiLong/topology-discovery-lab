@@ -4,19 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from ipaddress import ip_address, ip_network
 from typing import Any, Protocol, cast
 
 from neo4j import GraphDatabase
 
 from services.topology_discovery.config import Neo4jConfig
-from services.topology_discovery.models import (
-    DeviceNode,
-    InterfaceNode,
-    LinkEdge,
-    NetworkSegmentNode,
-    TopologySnapshot,
-)
+from services.topology_discovery.models import DeviceNode, InterfaceNode, LinkEdge, TopologySnapshot
 
 
 class Neo4jRepositoryError(RuntimeError):
@@ -92,12 +85,6 @@ class Neo4jTopologyRepository:
             with driver.session(database=self._config.database) as session:
                 for device in snapshot.devices:
                     self._upsert_device(session, device)
-                for segment in snapshot.network_segments:
-                    self._upsert_network_segment(session, segment)
-                for device in snapshot.devices:
-                    for segment in snapshot.network_segments:
-                        if _device_belongs_to_segment(device, segment):
-                            self._upsert_device_segment_relationship(session, device, segment)
                 for interface in snapshot.interfaces:
                     self._upsert_interface(session, interface)
                 for link in snapshot.links:
@@ -149,36 +136,6 @@ class Neo4jTopologyRepository:
             MERGE (d)-[:HAS_INTERFACE]->(i)
             """,
             _interface_parameters(interface),
-        )
-
-    def _upsert_network_segment(self, session: Session, segment: NetworkSegmentNode) -> None:
-        session.run(
-            """
-            MERGE (s:NetworkSegment {segment_id: $segment_id})
-            SET s.target = $target,
-                s.cidr = $cidr,
-                s.source = $source,
-                s.last_seen = $last_seen
-            """,
-            _network_segment_parameters(segment),
-        )
-
-    def _upsert_device_segment_relationship(
-        self,
-        session: Session,
-        device: DeviceNode,
-        segment: NetworkSegmentNode,
-    ) -> None:
-        session.run(
-            """
-            MATCH (d:Device {device_id: $device_id})
-            MATCH (s:NetworkSegment {segment_id: $segment_id})
-            MERGE (d)-[:BELONGS_TO_SEGMENT]->(s)
-            """,
-            {
-                "device_id": device.device_id,
-                "segment_id": segment.segment_id,
-            },
         )
 
     def _upsert_link(self, session: Session, link: LinkEdge) -> None:
@@ -245,16 +202,6 @@ def _interface_parameters(interface: InterfaceNode) -> dict[str, Any]:
     }
 
 
-def _network_segment_parameters(segment: NetworkSegmentNode) -> dict[str, Any]:
-    return {
-        "segment_id": segment.segment_id,
-        "target": segment.target,
-        "cidr": segment.cidr,
-        "source": segment.source,
-        "last_seen": _to_neo4j_datetime(segment.last_seen),
-    }
-
-
 def _normalized_link_parameters(link: LinkEdge) -> dict[str, Any]:
     source_device_id = link.source_device_id
     target_device_id = link.target_device_id
@@ -282,10 +229,3 @@ def _normalized_link_parameters(link: LinkEdge) -> dict[str, Any]:
 
 def _to_neo4j_datetime(value: datetime) -> str:
     return value.isoformat()
-
-
-def _device_belongs_to_segment(device: DeviceNode, segment: NetworkSegmentNode) -> bool:
-    device_ip = ip_address(device.ip)
-    if segment.cidr is None:
-        return device_ip == ip_address(segment.target)
-    return device_ip in ip_network(segment.cidr, strict=False)

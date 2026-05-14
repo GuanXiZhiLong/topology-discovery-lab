@@ -95,13 +95,7 @@ neo4j:
 - `reachable: bool`
 - `latency_ms: float | None`
 - `discovered_by: str`
-- `source_target: str | None`
-- `source_targets: list[str]`
 - `error: str | None`
-
-`source_target` 表示该主机最先由哪个配置目标发现，例如 `192.0.2.0/24`。
-
-`source_targets` 表示该主机匹配到的所有配置目标。多个网段重叠时，同一个 IP 可能同时属于多个 target，解析和写入时应保留这些来源信息。
 
 ### `DeviceNode`
 
@@ -188,40 +182,12 @@ link:{min_endpoint}:{max_endpoint}
 表示一次完整拓扑发现结果。
 
 - `snapshot_id: str`
-- `scan_targets: list[str]`
 - `started_at: datetime`
 - `finished_at: datetime | None`
 - `devices: list[DeviceNode]`
 - `interfaces: list[InterfaceNode]`
 - `links: list[LinkEdge]`
 - `errors: list[DiscoveryError]`
-
-`scan_targets` 记录本次扫描配置中的原始 IP 或 CIDR 目标，用于后续审计、统计和图数据库中的网段归属关系。
-
-### `NetworkSegmentNode`
-
-表示一个扫描目标网段或单个扫描目标。
-
-- `segment_id: str`
-- `target: str`
-- `cidr: str | None`
-- `source: str`
-- `last_seen: datetime`
-
-`segment_id` 生成规则：
-
-```text
-segment:{normalized_target}
-```
-
-其中 `normalized_target` 应使用标准化后的 IP 或 CIDR 字符串。示例：
-
-```text
-segment:192.0.2.0/24
-segment:192.0.2.1
-```
-
-对于单个 IP，`cidr` 可以为 `None`，`target` 保留原始配置值或标准化后的 IP。
 
 ### `DiscoveryError`
 
@@ -299,21 +265,6 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 
 ## 拓扑解析设计
 
-### 多网段扫描规则
-
-`ScanConfig.targets` 支持多个目标，每个目标可以是单个 IP 或 CIDR。
-
-扫描展开规则：
-
-1. 按配置顺序展开每个 target。
-2. 对展开后的 IP 进行去重，避免重叠网段导致同一 IP 被重复探测。
-3. 如果同一 IP 属于多个 target，`AliveHost.source_targets` 应记录所有来源 target。
-4. `AliveHost.source_target` 保留第一个命中的 target，作为兼容字段和简化显示字段。
-5. `TopologySnapshot.scan_targets` 保留本次扫描使用的原始 target 列表。
-6. 单个 target 格式非法时应作为配置错误处理，不应进入扫描阶段。
-
-多网段场景中，设备去重不应依赖网段归属，而应依赖 `device_id`、管理 IP 或后续更稳定的设备标识。
-
 设备去重优先级：
 
 1. `device_id`
@@ -361,41 +312,6 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 - `CONNECTED_TO`
 - `DISCOVERED_IN`
 - `BELONGS_TO_SEGMENT`
-
-### `NetworkSegment` 节点属性
-
-| 属性 | 说明 |
-| --- | --- |
-| `segment_id` | 唯一 ID |
-| `target` | 配置中的扫描目标或标准化后的目标 |
-| `cidr` | CIDR 网段，单个 IP 时可以为空 |
-| `source` | 数据来源，例如 `config` |
-| `last_seen` | 最近一次扫描时间 |
-
-网段写入 Cypher 示例：
-
-```cypher
-MERGE (s:NetworkSegment {segment_id: $segment_id})
-SET s.target = $target,
-    s.cidr = $cidr,
-    s.source = $source,
-    s.last_seen = $last_seen
-```
-
-### `BELONGS_TO_SEGMENT` 关系
-
-结构：
-
-```cypher
-(:Device)-[:BELONGS_TO_SEGMENT]->(:NetworkSegment)
-```
-
-含义：
-
-1. 一个设备可以属于多个扫描目标。
-2. 多个重叠网段命中同一设备时，不重复创建设备节点，但可以建立多个网段归属关系。
-3. 重复扫描同一 target 不应重复创建关系。
-4. 网段归属用于查询和统计，不应作为设备唯一身份判断依据。
 
 设备写入必须使用：
 
@@ -458,8 +374,6 @@ class Neo4jTopologyRepository:
     def save_snapshot(self, snapshot: TopologySnapshot) -> None:
         ...
 ```
-
-`save_snapshot` 还应负责写入本次扫描涉及的 `NetworkSegment` 节点，并根据 `AliveHost.source_targets`、`TopologySnapshot.scan_targets` 或解析阶段保留的归属信息建立 `BELONGS_TO_SEGMENT` 关系。
 
 ## 最小可运行流程
 

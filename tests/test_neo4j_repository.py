@@ -11,7 +11,6 @@ from services.topology_discovery.models import (
     DeviceNode,
     InterfaceNode,
     LinkEdge,
-    NetworkSegmentNode,
     TopologySnapshot,
 )
 from services.topology_discovery.neo4j_repository import (
@@ -64,51 +63,6 @@ def test_save_snapshot_uses_configured_database() -> None:
     repository.save_snapshot(TopologySnapshot(snapshot_id="empty", started_at=NOW))
 
     assert driver.database == "topology"
-
-
-def test_save_snapshot_writes_network_segments_and_memberships() -> None:
-    driver = FakeDriver()
-    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
-    snapshot = TopologySnapshot(
-        snapshot_id="snapshot-1",
-        scan_targets=["192.0.2.1", "192.0.2.0/30"],
-        started_at=NOW,
-        devices=[
-            DeviceNode(
-                device_id="device:192.0.2.1",
-                ip="192.0.2.1",
-                device_type="unknown",
-                status="partial",
-                last_seen=NOW,
-                source="icmp",
-            )
-        ],
-        network_segments=[
-            NetworkSegmentNode(
-                segment_id="segment:192.0.2.1",
-                target="192.0.2.1",
-                source="config",
-                last_seen=NOW,
-            ),
-            NetworkSegmentNode(
-                segment_id="segment:192.0.2.0/30",
-                target="192.0.2.0/30",
-                cidr="192.0.2.0/30",
-                source="config",
-                last_seen=NOW,
-            ),
-        ],
-    )
-
-    repository.save_snapshot(snapshot)
-
-    queries = [query for query, _ in driver.session_obj.runs]
-    assert (
-        sum("MERGE (s:NetworkSegment {segment_id: $segment_id})" in query for query in queries)
-        == 2
-    )
-    assert sum("MERGE (d)-[:BELONGS_TO_SEGMENT]->(s)" in query for query in queries) == 2
-    assert driver.session_obj.runs[1][1]["segment_id"] == "segment:192.0.2.1"
 
 
 def test_save_snapshot_normalizes_reversed_device_link_endpoints() -> None:

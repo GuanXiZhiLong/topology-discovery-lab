@@ -12,7 +12,6 @@ from services.topology_discovery.models import (
     DiscoveryError,
     InterfaceNode,
     LinkEdge,
-    NetworkSegmentNode,
     TopologySnapshot,
 )
 
@@ -29,17 +28,6 @@ def test_alive_host_accepts_valid_data() -> None:
 
     assert host.ip == "192.0.2.1"
     assert host.reachable is True
-
-
-def test_alive_host_normalizes_source_targets() -> None:
-    host = AliveHost(
-        ip="192.0.2.1",
-        reachable=True,
-        discovered_by="icmp",
-        source_targets=["192.0.2.0/24", "192.0.2.1"],
-    )
-
-    assert host.source_target == "192.0.2.0/24"
 
 
 def test_alive_host_rejects_invalid_ip() -> None:
@@ -145,28 +133,6 @@ def test_link_edge_rejects_naive_last_seen() -> None:
         )
 
 
-def test_network_segment_node_accepts_cidr_target() -> None:
-    segment = NetworkSegmentNode(
-        segment_id="segment:192.0.2.0/24",
-        target="192.0.2.0/24",
-        cidr="192.0.2.0/24",
-        source="config",
-        last_seen=NOW,
-    )
-
-    assert segment.segment_id == "segment:192.0.2.0/24"
-
-
-def test_network_segment_node_rejects_invalid_target() -> None:
-    with pytest.raises(ValidationError):
-        NetworkSegmentNode(
-            segment_id="segment:not-a-target",
-            target="not-a-target",
-            source="config",
-            last_seen=NOW,
-        )
-
-
 def test_topology_snapshot_accepts_nested_models() -> None:
     snapshot = TopologySnapshot(
         snapshot_id="snapshot-1",
@@ -196,26 +162,6 @@ def test_topology_snapshot_accepts_nested_models() -> None:
 
     assert snapshot.devices[0].ip == "192.0.2.1"
     assert snapshot.errors[0].recoverable is True
-
-
-def test_topology_snapshot_accepts_scan_targets_and_segments() -> None:
-    snapshot = TopologySnapshot(
-        snapshot_id="snapshot-1",
-        scan_targets=["192.0.2.0/24"],
-        started_at=NOW,
-        network_segments=[
-            NetworkSegmentNode(
-                segment_id="segment:192.0.2.0/24",
-                target="192.0.2.0/24",
-                cidr="192.0.2.0/24",
-                source="config",
-                last_seen=NOW,
-            )
-        ],
-    )
-
-    assert snapshot.scan_targets == ["192.0.2.0/24"]
-    assert snapshot.network_segments[0].target == "192.0.2.0/24"
 
 
 def test_topology_snapshot_rejects_finished_before_started() -> None:
