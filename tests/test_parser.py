@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from services.topology_discovery.models import AliveHost, SnmpDeviceInfo, SnmpInterfaceInfo
+from services.topology_discovery.models import (
+    AliveHost,
+    SnmpDeviceInfo,
+    SnmpInterfaceInfo,
+    SshDeviceInfo,
+)
 from services.topology_discovery.parser import build_topology_snapshot
 
 
@@ -91,6 +96,17 @@ def test_build_topology_snapshot_records_icmp_error() -> None:
     assert snapshot.devices[0].status == "offline"
     assert snapshot.errors[0].stage == "icmp"
     assert snapshot.errors[0].message == "unreachable"
+
+
+def test_build_topology_snapshot_records_ssh_failure() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[AliveHost(ip="192.0.2.1", reachable=True, discovered_by="icmp")],
+        snmp_results=[],
+        ssh_results=[SshDeviceInfo(ip="192.0.2.1", success=False, error="ssh_timeout")],
+    )
+
+    assert snapshot.errors[0].stage == "ssh"
+    assert snapshot.errors[0].message == "ssh_timeout"
 
 
 def test_build_topology_snapshot_identifies_device_types() -> None:

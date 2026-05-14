@@ -12,6 +12,7 @@ from services.topology_discovery.models import (
     InterfaceNode,
     SnmpDeviceInfo,
     SnmpInterfaceInfo,
+    SshDeviceInfo,
     TopologySnapshot,
 )
 
@@ -19,10 +20,12 @@ from services.topology_discovery.models import (
 def build_topology_snapshot(
     alive_hosts: list[AliveHost],
     snmp_results: list[SnmpDeviceInfo],
+    ssh_results: list[SshDeviceInfo] | None = None,
 ) -> TopologySnapshot:
     """Build a topology snapshot from protocol collection results."""
 
     started_at = datetime.now(UTC)
+    resolved_ssh_results = ssh_results or []
     devices = _deduplicate_devices(
         [
             *_devices_from_alive_hosts(alive_hosts, started_at),
@@ -37,7 +40,11 @@ def build_topology_snapshot(
             for interface in _interfaces_from_snmp_result(snmp_result, started_at)
         ]
     )
-    errors = _errors_from_alive_hosts(alive_hosts) + _errors_from_snmp_results(snmp_results)
+    errors = (
+        _errors_from_alive_hosts(alive_hosts)
+        + _errors_from_snmp_results(snmp_results)
+        + _errors_from_ssh_results(resolved_ssh_results)
+    )
     finished_at = datetime.now(UTC)
 
     return TopologySnapshot(
@@ -139,6 +146,19 @@ def _errors_from_snmp_results(snmp_results: list[SnmpDeviceInfo]) -> list[Discov
             recoverable=True,
         )
         for result in snmp_results
+        if not result.success
+    ]
+
+
+def _errors_from_ssh_results(ssh_results: list[SshDeviceInfo]) -> list[DiscoveryError]:
+    return [
+        DiscoveryError(
+            target=result.ip,
+            stage="ssh",
+            message=result.error or "ssh collection failed",
+            recoverable=True,
+        )
+        for result in ssh_results
         if not result.success
     ]
 
