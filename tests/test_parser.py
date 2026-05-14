@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from services.topology_discovery.models import AliveHost
+from services.topology_discovery.models import AliveHost, SnmpDeviceInfo, SnmpInterfaceInfo
 from services.topology_discovery.parser import build_topology_snapshot
-from services.topology_discovery.snmp import SnmpDeviceInfo, SnmpInterfaceInfo
 
 
 def test_build_topology_snapshot_creates_device_from_alive_host() -> None:
     snapshot = build_topology_snapshot(
         alive_hosts=[AliveHost(ip="192.0.2.1", reachable=True, discovered_by="icmp")],
         snmp_results=[],
-        ssh_results=[],
     )
 
     assert len(snapshot.devices) == 1
@@ -22,7 +20,6 @@ def test_build_topology_snapshot_creates_device_and_interface_from_snmp() -> Non
     snapshot = build_topology_snapshot(
         alive_hosts=[AliveHost(ip="192.0.2.1", reachable=True, discovered_by="icmp")],
         snmp_results=[_snmp_result()],
-        ssh_results=[],
     )
 
     assert len(snapshot.devices) == 1
@@ -41,7 +38,6 @@ def test_build_topology_snapshot_deduplicates_devices_preferring_snmp() -> None:
             AliveHost(ip="192.0.2.1", reachable=True, discovered_by="icmp"),
         ],
         snmp_results=[_snmp_result()],
-        ssh_results=[],
     )
 
     assert len(snapshot.devices) == 1
@@ -59,7 +55,6 @@ def test_build_topology_snapshot_deduplicates_interfaces() -> None:
     snapshot = build_topology_snapshot(
         alive_hosts=[],
         snmp_results=[snmp_result],
-        ssh_results=[],
     )
 
     assert len(snapshot.interfaces) == 1
@@ -72,7 +67,6 @@ def test_build_topology_snapshot_records_snmp_failure_without_dropping_device() 
         snmp_results=[
             SnmpDeviceInfo(ip="192.0.2.1", success=False, error="snmp_timeout"),
         ],
-        ssh_results=[],
     )
 
     assert len(snapshot.devices) == 1
@@ -92,7 +86,6 @@ def test_build_topology_snapshot_records_icmp_error() -> None:
             )
         ],
         snmp_results=[],
-        ssh_results=[],
     )
 
     assert snapshot.devices[0].status == "offline"
@@ -113,7 +106,6 @@ def test_build_topology_snapshot_identifies_device_types() -> None:
         snapshot = build_topology_snapshot(
             alive_hosts=[],
             snmp_results=[_snmp_result(ip="192.0.2.1", sys_descr=description)],
-            ssh_results=[],
         )
 
         assert snapshot.devices[0].device_type == expected_type
@@ -123,7 +115,6 @@ def test_build_topology_snapshot_uses_timezone_aware_timestamps() -> None:
     snapshot = build_topology_snapshot(
         alive_hosts=[],
         snmp_results=[],
-        ssh_results=[],
     )
 
     assert snapshot.started_at.tzinfo is not None

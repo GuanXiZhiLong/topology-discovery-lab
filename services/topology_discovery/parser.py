@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from datetime import UTC, datetime
 
 from services.topology_discovery.models import (
@@ -11,19 +10,18 @@ from services.topology_discovery.models import (
     DeviceType,
     DiscoveryError,
     InterfaceNode,
+    SnmpDeviceInfo,
+    SnmpInterfaceInfo,
     TopologySnapshot,
 )
-from services.topology_discovery.snmp import SnmpDeviceInfo, SnmpInterfaceInfo
 
 
 def build_topology_snapshot(
     alive_hosts: list[AliveHost],
     snmp_results: list[SnmpDeviceInfo],
-    ssh_results: Sequence[object] | None = None,
 ) -> TopologySnapshot:
     """Build a topology snapshot from protocol collection results."""
 
-    _ = ssh_results
     started_at = datetime.now(UTC)
     devices = _deduplicate_devices(
         [
