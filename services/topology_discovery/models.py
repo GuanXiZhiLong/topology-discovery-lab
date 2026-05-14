@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -32,6 +32,8 @@ class AliveHost(DiscoveryBaseModel):
     reachable: bool
     latency_ms: float | None = None
     discovered_by: str
+    source_target: str | None = None
+    source_targets: list[str] = Field(default_factory=list)
     error: str | None = None
 
     @field_validator("ip")
@@ -46,6 +48,14 @@ class AliveHost(DiscoveryBaseModel):
         if value is not None and value < 0:
             raise ValueError("latency_ms must be greater than or equal to 0")
         return value
+
+    @model_validator(mode="after")
+    def normalize_source_target(self) -> AliveHost:
+        if self.source_target is None and self.source_targets:
+            self.source_target = self.source_targets[0]
+        if self.source_target is not None and not self.source_targets:
+            self.source_targets = [self.source_target]
+        return self
 
 
 class SnmpInterfaceInfo(DiscoveryBaseModel):
@@ -142,6 +152,29 @@ class LinkEdge(DiscoveryBaseModel):
     last_seen: datetime
 
 
+class NetworkSegmentNode(DiscoveryBaseModel):
+    """A scan target segment in a topology snapshot."""
+
+    segment_id: str
+    target: str
+    cidr: str | None = None
+    source: str
+    last_seen: datetime
+
+    @field_validator("target")
+    @classmethod
+    def validate_target(cls, value: str) -> str:
+        _validate_ip_or_network(value)
+        return value
+
+    @field_validator("cidr")
+    @classmethod
+    def validate_cidr(cls, value: str | None) -> str | None:
+        if value is not None:
+            ip_network(value, strict=False)
+        return value
+
+
 class DiscoveryError(DiscoveryBaseModel):
     """A recoverable or fatal error observed during discovery."""
 
@@ -155,11 +188,13 @@ class TopologySnapshot(DiscoveryBaseModel):
     """A complete topology discovery result."""
 
     snapshot_id: str
+    scan_targets: list[str] = Field(default_factory=list)
     started_at: datetime
     finished_at: datetime | None = None
     devices: list[DeviceNode] = Field(default_factory=list)
     interfaces: list[InterfaceNode] = Field(default_factory=list)
     links: list[LinkEdge] = Field(default_factory=list)
+    network_segments: list[NetworkSegmentNode] = Field(default_factory=list)
     errors: list[DiscoveryError] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -167,3 +202,13 @@ class TopologySnapshot(DiscoveryBaseModel):
         if self.finished_at is not None and self.finished_at < self.started_at:
             raise ValueError("finished_at must be greater than or equal to started_at")
         return self
+
+
+def _validate_ip_or_network(value: str) -> None:
+    try:
+        ip_address(value)
+        return
+    except ValueError:
+        pass
+
+    ip_network(value, strict=False)

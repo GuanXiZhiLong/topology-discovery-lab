@@ -5,7 +5,12 @@ from typing import Any
 import pytest
 
 from services.topology_discovery.config import ScanConfig
-from services.topology_discovery.icmp import expand_targets, probe_host, scan_alive_hosts
+from services.topology_discovery.icmp import (
+    expand_target_sources,
+    expand_targets,
+    probe_host,
+    scan_alive_hosts,
+)
 from services.topology_discovery.models import AliveHost
 
 
@@ -19,6 +24,13 @@ def test_expand_targets_supports_cidr() -> None:
 
 def test_expand_targets_deduplicates_in_order() -> None:
     assert expand_targets(["192.0.2.1", "192.0.2.0/30"]) == ["192.0.2.1", "192.0.2.2"]
+
+
+def test_expand_target_sources_preserves_overlapping_target_sources() -> None:
+    assert expand_target_sources(["192.0.2.1", "192.0.2.0/30"]) == {
+        "192.0.2.1": ["192.0.2.1", "192.0.2.0/30"],
+        "192.0.2.2": ["192.0.2.0/30"],
+    }
 
 
 def test_scan_alive_hosts_returns_alive_host_results() -> None:
@@ -37,6 +49,8 @@ def test_scan_alive_hosts_returns_alive_host_results() -> None:
             reachable=True,
             latency_ms=1.0,
             discovered_by="icmp",
+            source_target="192.0.2.1",
+            source_targets=["192.0.2.1"],
         )
     ]
 
@@ -53,8 +67,27 @@ def test_scan_alive_hosts_reports_failed_probe_without_stopping() -> None:
 
     assert [result.ip for result in results] == ["192.0.2.1", "198.51.100.1"]
     assert results[0].reachable is True
+    assert results[0].source_targets == ["192.0.2.1"]
     assert results[1].reachable is False
+    assert results[1].source_target == "198.51.100.1"
     assert results[1].error == "timeout"
+
+
+def test_scan_alive_hosts_records_all_source_targets_for_overlapping_ranges() -> None:
+    config = ScanConfig(
+        targets=["192.0.2.1", "192.0.2.0/30"],
+        timeout_seconds=2,
+        retry_count=0,
+        max_concurrency=2,
+    )
+
+    results = scan_alive_hosts(config, probe=_successful_probe)
+
+    assert results[0].ip == "192.0.2.1"
+    assert results[0].source_target == "192.0.2.1"
+    assert results[0].source_targets == ["192.0.2.1", "192.0.2.0/30"]
+    assert results[1].ip == "192.0.2.2"
+    assert results[1].source_targets == ["192.0.2.0/30"]
 
 
 def test_scan_alive_hosts_retries_until_success() -> None:
@@ -99,6 +132,8 @@ def test_scan_alive_hosts_converts_probe_exception_to_failed_result() -> None:
         reachable=False,
         latency_ms=None,
         discovered_by="icmp",
+        source_target="192.0.2.1",
+        source_targets=["192.0.2.1"],
         error="RuntimeError",
     )
 
