@@ -197,6 +197,12 @@ Edge
 | 接口速率 | `speed_bps` |
 | 状态 | `status` |
 | 数据来源 | `source` |
+| 首个来源扫描目标 | `source_target` |
+| 所有来源扫描目标 | `source_targets` |
+| 扫描目标列表 | `scan_targets` |
+| 网段唯一标识 | `segment_id` |
+| 扫描目标 | `target` |
+| CIDR 网段 | `cidr` |
 | 最近发现时间 | `last_seen` |
 | 开始时间 | `started_at` |
 | 完成时间 | `finished_at` |
