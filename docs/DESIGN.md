@@ -114,6 +114,15 @@ neo4j:
 - `last_seen: datetime`
 - `source: str`
 
+`status` 允许值：
+
+| 值 | 含义 |
+| --- | --- |
+| `online` | 设备可达，且关键采集信息成功获取。 |
+| `offline` | 设备当前不可达，通常用于增量更新或离线标记。 |
+| `unknown` | 设备状态无法判断，或只有不完整的候选信息。 |
+| `partial` | 设备部分可发现，例如 ICMP 可达但 SNMP/SSH 部分失败，仍保留基础节点。 |
+
 `device_id` 生成优先级：
 
 1. 稳定设备序列号。

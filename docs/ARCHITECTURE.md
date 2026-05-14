@@ -23,6 +23,7 @@
 
 - 后端语言：Python 3.11
 - Python 版本约束：`>=3.11,<3.12`
+- 本地开发环境：conda，环境名固定为 `topology-discovery-lab`
 - 图数据库：Neo4j
 - 配置读取：`pyyaml`
 - 数据模型校验：`pydantic`
