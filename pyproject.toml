@@ -46,5 +46,5 @@ explicit_package_bases = true
 packages = ["services.topology_discovery"]
 
 [[tool.mypy.overrides]]
-module = ["pysnmp.*", "yaml"]
+module = ["pysnmp.*", "scapy.*", "yaml"]
 ignore_missing_imports = true

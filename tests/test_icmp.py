@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from typing import Any
+
+import pytest
+
 from services.topology_discovery.config import ScanConfig
-from services.topology_discovery.icmp import expand_targets, scan_alive_hosts
+from services.topology_discovery.icmp import expand_targets, probe_host, scan_alive_hosts
 from services.topology_discovery.models import AliveHost
 
 
@@ -99,6 +103,35 @@ def test_scan_alive_hosts_converts_probe_exception_to_failed_result() -> None:
     )
 
 
+def test_probe_host_uses_icmp_echo_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("services.topology_discovery.icmp.sr1", _successful_sr1)
+
+    result = probe_host("192.0.2.1", timeout_seconds=2)
+
+    assert result.ip == "192.0.2.1"
+    assert result.reachable is True
+    assert result.discovered_by == "icmp"
+    assert result.error is None
+
+
+def test_probe_host_reports_unreachable_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("services.topology_discovery.icmp.sr1", _timeout_sr1)
+
+    result = probe_host("192.0.2.1", timeout_seconds=2)
+
+    assert result.reachable is False
+    assert result.error == "unreachable"
+
+
+def test_probe_host_converts_os_error_to_failed_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("services.topology_discovery.icmp.sr1", _raising_sr1)
+
+    result = probe_host("192.0.2.1", timeout_seconds=2)
+
+    assert result.reachable is False
+    assert result.error == "PermissionError"
+
+
 def _successful_probe(ip: str, timeout_seconds: float) -> AliveHost:
     return AliveHost(
         ip=ip,
@@ -122,3 +155,15 @@ def _mixed_probe(ip: str, timeout_seconds: float) -> AliveHost:
 
 def _raising_probe(ip: str, timeout_seconds: float) -> AliveHost:
     raise RuntimeError("probe failed")
+
+
+def _successful_sr1(*args: Any, **kwargs: Any) -> object:
+    return object()
+
+
+def _timeout_sr1(*args: Any, **kwargs: Any) -> None:
+    return None
+
+
+def _raising_sr1(*args: Any, **kwargs: Any) -> None:
+    raise PermissionError("raw socket denied")

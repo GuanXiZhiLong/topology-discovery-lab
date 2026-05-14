@@ -17,6 +17,13 @@ class DiscoveryBaseModel(BaseModel):
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
+    @field_validator("*")
+    @classmethod
+    def validate_timezone_aware_datetime(cls, value: object) -> object:
+        if isinstance(value, datetime) and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("datetime values must be timezone-aware")
+        return value
+
 
 class AliveHost(DiscoveryBaseModel):
     """A host discovered by a reachability probe."""

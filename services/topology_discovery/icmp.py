@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ipaddress import ip_address, ip_network
-from socket import AF_INET, SOCK_STREAM, socket
 from time import perf_counter
 from typing import Protocol
+
+from scapy.layers.inet import ICMP, IP
+from scapy.sendrecv import sr1
 
 from services.topology_discovery.config import ScanConfig
 from services.topology_discovery.models import AliveHost
@@ -33,16 +35,11 @@ def expand_targets(targets: list[str]) -> list[str]:
 
 
 def probe_host(ip: str, timeout_seconds: float) -> AliveHost:
-    """Probe a single host and return a structured reachability result.
-
-    This skeleton uses a short TCP connect attempt against common network-service
-    ports as a low-privilege reachability probe. Tests inject a fake probe, so
-    unit tests never depend on real network access.
-    """
+    """Probe a single host with ICMP echo and return a reachability result."""
 
     start = perf_counter()
     try:
-        reachable = _can_connect(ip, timeout_seconds)
+        response = _send_icmp_echo(ip, timeout_seconds)
     except OSError as exc:
         return AliveHost(
             ip=ip,
@@ -52,6 +49,7 @@ def probe_host(ip: str, timeout_seconds: float) -> AliveHost:
             error=exc.__class__.__name__,
         )
 
+    reachable = response is not None
     latency_ms = (perf_counter() - start) * 1000
     return AliveHost(
         ip=ip,
@@ -129,11 +127,9 @@ def _probe_with_retries(
     return last_result
 
 
-def _can_connect(ip: str, timeout_seconds: float) -> bool:
-    for port in (22, 161, 443, 80):
-        with socket(AF_INET, SOCK_STREAM) as sock:
-            sock.settimeout(timeout_seconds)
-            result = sock.connect_ex((ip, port))
-            if result == 0:
-                return True
-    return False
+def _send_icmp_echo(ip: str, timeout_seconds: float) -> object | None:
+    return sr1(
+        IP(dst=ip) / ICMP(),
+        timeout=timeout_seconds,
+        verbose=False,
+    )

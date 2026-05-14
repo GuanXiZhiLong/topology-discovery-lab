@@ -65,6 +65,60 @@ def test_save_snapshot_uses_configured_database() -> None:
     assert driver.database == "topology"
 
 
+def test_save_snapshot_normalizes_reversed_device_link_endpoints() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        started_at=NOW,
+        links=[
+            LinkEdge(
+                link_id="link:device-a:device-b",
+                source_device_id="device:198.51.100.1",
+                target_device_id="device:192.0.2.1",
+                discovery_method="ip_subnet",
+                confidence=0.3,
+                last_seen=NOW,
+            )
+        ],
+    )
+
+    repository.save_snapshot(snapshot)
+
+    params = driver.session_obj.runs[0][1]
+    assert params["source_device_id"] == "device:192.0.2.1"
+    assert params["target_device_id"] == "device:198.51.100.1"
+
+
+def test_save_snapshot_normalizes_reversed_interface_link_endpoints() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        started_at=NOW,
+        links=[
+            LinkEdge(
+                link_id="link:interface-a:interface-b",
+                source_device_id="device:198.51.100.1",
+                target_device_id="device:192.0.2.1",
+                source_interface_id="interface:device:198.51.100.1:1",
+                target_interface_id="interface:device:192.0.2.1:1",
+                discovery_method="lldp",
+                confidence=1.0,
+                last_seen=NOW,
+            )
+        ],
+    )
+
+    repository.save_snapshot(snapshot)
+
+    params = driver.session_obj.runs[0][1]
+    assert params["source_interface_id"] == "interface:device:192.0.2.1:1"
+    assert params["target_interface_id"] == "interface:device:198.51.100.1:1"
+    assert params["source_device_id"] == "device:192.0.2.1"
+    assert params["target_device_id"] == "device:198.51.100.1"
+
+
 def test_connect_failure_is_sanitized() -> None:
     repository = Neo4jTopologyRepository(
         _config(password="dummy-password"),

@@ -146,10 +146,10 @@ class Neo4jTopologyRepository:
                 MATCH (target:Interface {interface_id: $target_interface_id})
                 MERGE (source)-[r:CONNECTED_TO {link_id: $link_id}]->(target)
                 SET r.discovery_method = $discovery_method,
-                    r.confidence = $confidence,
-                    r.last_seen = $last_seen
+                r.confidence = $confidence,
+                r.last_seen = $last_seen
                 """,
-                _link_parameters(link),
+                _normalized_link_parameters(link),
             )
             return
 
@@ -162,7 +162,7 @@ class Neo4jTopologyRepository:
                 r.confidence = $confidence,
                 r.last_seen = $last_seen
             """,
-            _link_parameters(link),
+            _normalized_link_parameters(link),
         )
 
 
@@ -202,13 +202,25 @@ def _interface_parameters(interface: InterfaceNode) -> dict[str, Any]:
     }
 
 
-def _link_parameters(link: LinkEdge) -> dict[str, Any]:
+def _normalized_link_parameters(link: LinkEdge) -> dict[str, Any]:
+    source_device_id = link.source_device_id
+    target_device_id = link.target_device_id
+    source_interface_id = link.source_interface_id
+    target_interface_id = link.target_interface_id
+
+    if source_interface_id and target_interface_id:
+        if source_interface_id > target_interface_id:
+            source_interface_id, target_interface_id = target_interface_id, source_interface_id
+            source_device_id, target_device_id = target_device_id, source_device_id
+    elif source_device_id > target_device_id:
+        source_device_id, target_device_id = target_device_id, source_device_id
+
     return {
         "link_id": link.link_id,
-        "source_device_id": link.source_device_id,
-        "target_device_id": link.target_device_id,
-        "source_interface_id": link.source_interface_id,
-        "target_interface_id": link.target_interface_id,
+        "source_device_id": source_device_id,
+        "target_device_id": target_device_id,
+        "source_interface_id": source_interface_id,
+        "target_interface_id": target_interface_id,
         "discovery_method": link.discovery_method,
         "confidence": link.confidence,
         "last_seen": _to_neo4j_datetime(link.last_seen),
