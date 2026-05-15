@@ -85,6 +85,7 @@ def run_discovery(
         alive_hosts=alive_hosts,
         snmp_results=snmp_results,
         ssh_results=ssh_results,
+        scan_targets=config.scan.targets,
     )
     repository = repository_factory(config.neo4j)
     try:

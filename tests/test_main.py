@@ -42,6 +42,7 @@ def test_run_discovery_saves_snapshot_and_returns_summary() -> None:
         errors=1,
     )
     assert repository.saved_snapshot is not None
+    assert repository.saved_snapshot.scan_targets == ["192.0.2.1"]
     assert repository.closed is True
 
 
