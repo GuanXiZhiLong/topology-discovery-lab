@@ -111,6 +111,8 @@ neo4j:
 - `ip: str`
 - `hostname: str | None`
 - `device_type: str`
+- `endpoint_type: str | None`
+- `deployment_type: str`
 - `vendor: str | None`
 - `model: str | None`
 - `os_version: str | None`
@@ -128,6 +130,12 @@ neo4j:
 | `offline` | 设备当前不可达，通常用于增量更新或离线标记。 |
 | `unknown` | 设备状态无法判断，或只有不完整的候选信息。 |
 | `partial` | 设备部分可发现，例如 ICMP 可达但 SNMP/SSH 部分失败，仍保留基础节点。 |
+
+`device_type` 表示设备在网络中的主要角色。
+
+`endpoint_type` 仅在 `device_type = "endpoint"` 时使用。非终端设备应设置为 `None`。
+
+`deployment_type` 表示设备部署形态，而不是网络角色。
 
 `device_id` 生成优先级：
 
@@ -234,24 +242,257 @@ segment:192.0.2.1
 
 错误阶段建议：`config`、`icmp`、`snmp`、`ssh`、`parse`、`neo4j`、`main`。
 
-## 设备类型识别
+## 设备识别设计
 
-初期设备类型：
+设备识别拆分为三个维度：
+
+1. `device_type`：设备在网络中的主要角色。
+2. `endpoint_type`：终端设备的细分类别。
+3. `deployment_type`：设备是物理、虚拟还是未知部署形态。
+
+不允许将这些维度组合成单个枚举，例如 `physical_switch`、`virtual_firewall`、`mobile_phone`。
+
+### 设备角色 `device_type`
+
+当前阶段推荐设备角色：
 
 - `router`
 - `switch`
 - `firewall`
-- `server`
 - `wireless_ap`
+- `server`
+- `endpoint`
+- `printer`
+- `storage`
+- `camera`
+- `iot`
 - `unknown`
 
-初期识别规则：
+初期最小实现可以只覆盖：
+
+```text
+router
+switch
+firewall
+wireless_ap
+server
+endpoint
+unknown
+```
+
+`device_type` 识别依据：
+
+1. SNMP `sysDescr`。
+2. SNMP `sysObjectID`。
+3. hostname 命名规则。
+4. MAC OUI。
+5. 接口数量和接口类型。
+6. LLDP/CDP 邻居信息。
+7. SSH `show version` 输出。
+
+初期简单规则：
 
 - `sysDescr` 包含 `Switch` -> `switch`
 - `sysDescr` 包含 `Router` -> `router`
 - `sysDescr` 包含 `Firewall` -> `firewall`
 - `sysDescr` 包含 `AP` 或 `Wireless` -> `wireless_ap`
+- `sysDescr` 包含 `Server`、`Linux`、`Windows Server` -> `server`
+- `sysDescr` 包含 `Windows`、`macOS`、`Android`、`iOS` -> `endpoint`
 - 其他 -> `unknown`
+
+### 终端类型 `endpoint_type`
+
+`endpoint_type` 仅用于 `device_type = "endpoint"` 的设备。
+
+推荐值：
+
+- `pc`
+- `laptop`
+- `workstation`
+- `phone`
+- `tablet`
+- `unknown`
+
+非终端设备应设置为 `None`。
+
+示例：
+
+```text
+device_type = endpoint
+endpoint_type = pc
+deployment_type = physical
+```
+
+```text
+device_type = firewall
+endpoint_type = None
+deployment_type = virtual
+```
+
+### 部署形态 `deployment_type`
+
+推荐值：
+
+- `physical`
+- `virtual`
+- `unknown`
+
+默认值：
+
+```text
+deployment_type = unknown
+```
+
+`deployment_type` 识别依据：
+
+1. `sysDescr` 包含 `VMware`、`Virtual`、`KVM`、`QEMU`、`Hyper-V`、`VirtualBox`。
+2. `sysObjectID` 属于已知虚拟化厂商或虚拟设备。
+3. MAC OUI 属于虚拟化厂商。
+4. `vendor`、`model` 明确显示虚拟设备。
+5. 接口描述包含虚拟网卡特征。
+
+可推断为 `physical` 的依据：
+
+1. SNMP 返回明确硬件型号。
+2. `sysObjectID` 匹配实体网络设备厂商。
+3. LLDP/CDP 能发现物理邻居。
+4. 接口形态符合物理交换机、路由器或防火墙。
+
+无法可靠判断时必须使用 `unknown`，不应强行猜测。
+
+### 识别数据源优先级
+
+设备识别不应长期只依赖 SNMP `sysDescr`。真实测试发现，当 ICMP 可达但 SNMP 失败时，设备会大量停留在 `unknown`。
+
+推荐识别数据源优先级：
+
+1. 显式人工标注或配置覆盖。
+2. SNMP `sysObjectID` 厂商和设备类型映射。
+3. SNMP `sysDescr`、`sysName`。
+4. LLDP/CDP 邻居信息。
+5. SSH `show version`、`show lldp neighbors detail`、`show cdp neighbors detail`。
+6. MAC OUI。
+7. 接口数量、接口描述和接口速率特征。
+8. hostname 命名规则。
+9. 保守回退为 `unknown`。
+
+识别规则必须保守：低置信度数据只能辅助判断，不应覆盖更高优先级来源。
+
+### `sysObjectID` 映射表设计
+
+后续应引入受控映射表，用于提升 SNMP 成功设备的识别精度。
+
+推荐映射内容：
+
+```text
+sys_object_id_prefix
+vendor
+device_type
+deployment_type
+model_family
+confidence
+```
+
+示例规则：
+
+```text
+1.3.6.1.4.1.8072 -> vendor=net-snmp, device_type=server, deployment_type=unknown
+```
+
+映射表应作为代码内受控数据或配置样例维护，不应包含真实生产设备序列号或内部资产信息。
+
+### LLDP/CDP 识别增强
+
+LLDP/CDP 不只用于链路发现，也可用于提升设备识别精度。
+
+可使用的信息：
+
+1. 本端接口和远端接口。
+2. 远端系统名称。
+3. 远端系统描述。
+4. 远端 capabilities。
+5. 远端 chassis ID。
+6. 远端 management address。
+
+识别用途：
+
+1. `capabilities` 包含 bridge 时，可辅助识别为 `switch`。
+2. `capabilities` 包含 router 时，可辅助识别为 `router`。
+3. LLDP/CDP 邻居存在物理接口互联时，可辅助判断 `deployment_type = physical`，但不能单独作为强制判断依据。
+4. LLDP/CDP 可帮助发现只在邻居表中出现、但 SNMP 直接采集失败的设备候选。
+
+当前阶段可以先实现 SNMP LLDP/CDP OID 采集设计，SSH LLDP/CDP 作为补充。
+
+### SNMP 失败分类设计
+
+SNMP 失败不应只记录泛化的 `snmp request failed`。
+
+建议错误类型：
+
+```text
+snmp_timeout
+snmp_auth_failed
+snmp_transport_unreachable
+snmp_oid_unsupported
+snmp_parse_error
+snmp_unknown_error
+```
+
+错误信息必须脱敏，不得包含 community。
+
+### SNMP 凭据策略
+
+真实测试发现 SNMP 成功率可能显著低于 ICMP 可达率。后续设计应支持更灵活的 SNMP 参数策略。
+
+推荐演进方向：
+
+1. 当前阶段保留单一 `snmp.community`。
+2. 下一阶段支持多个只读 community 或 SNMP credential profile。
+3. 支持按 target 或网段选择不同 SNMP profile。
+4. 支持记录每个 profile 的成功/失败统计，但不记录明文凭据。
+
+配置设计可演进为：
+
+```yaml
+snmp:
+  enabled: true
+  profiles:
+    - name: "default"
+      version: "2c"
+      community: "from-local-config"
+      timeout_seconds: 2
+      retry_count: 1
+      port: 161
+```
+
+在实现 profile 前，不应破坏现有 `snmp.community` 配置。
+
+### UDP/161 可达性探测
+
+为了区分“ICMP 可达但 SNMP 不可用”和“SNMP 请求超时”，后续可增加 UDP/161 可达性或 SNMP 预探测。
+
+该探测只能作为诊断辅助，不应替代正式 SNMP 采集结果。
+
+### unknown 写入策略
+
+真实测试中大量 `unknown` 来自不可达或 SNMP 失败，不一定是识别规则不足。
+
+当前阶段策略：
+
+1. 继续保留扫描目标生成的 `DeviceNode`，以表达扫描覆盖范围。
+2. 不可达目标写入 `status = offline`、`device_type = unknown`。
+3. ICMP 可达但 SNMP/SSH 失败写入 `status = partial`、`device_type = unknown`。
+4. 设备识别率统计不应以全部 `scanned_hosts` 为唯一分母。
+
+统计口径：
+
+1. 扫描覆盖率：`scanned_hosts`。
+2. 存活率：`reachable_hosts / scanned_hosts`。
+3. SNMP 成功率：`snmp_successes / reachable_hosts`。
+4. 设备识别率：优先使用 `identified_devices / snmp_successes`。
+5. 拓扑写入覆盖率：`devices_written / scanned_hosts`。
+
+未来如需更严格地区分候选主机和确认设备，可引入 `HostCandidate` 标签或模型，但当前阶段先不引入，避免扩大范围。
 
 ## SNMP 采集设计
 
@@ -299,6 +540,56 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 
 ## 拓扑解析设计
 
+### 分层发现策略
+
+网络自动发现应采用分层递进策略，先保证基础发现闭环，再对无法识别或信息不足的设备启用更高级的数据源。
+
+发现层级：
+
+1. 基础发现层。
+2. 标准采集层。
+3. 补充识别层。
+4. 高级拓扑发现层。
+
+基础发现层：
+
+- 目标展开：单 IP、CIDR、多网段。
+- 存活探测：ICMP/ARP。
+- 结果：生成 `AliveHost`，记录可达性、延迟、来源 target。
+
+标准采集层：
+
+- SNMP 基础信息：`sysDescr`、`sysObjectID`、`sysName`。
+- SNMP 接口信息：接口名称、状态、MAC、速率。
+- 结果：生成 `DeviceNode` 和 `InterfaceNode`。
+
+补充识别层：
+
+- SSH 只读命令，例如 `show version`。
+- `sysObjectID` 映射表。
+- MAC OUI。
+- hostname 规则。
+- 接口数量、接口描述、接口速率特征。
+- 触发条件：基础发现可达但 SNMP 失败、SNMP 数据不足、`device_type = unknown`、`deployment_type = unknown`。
+
+高级拓扑发现层：
+
+- LLDP。
+- CDP。
+- 路由表。
+- ARP 表。
+- MAC 地址表。
+- 触发条件：设备已确认可达，但链路为 0、邻居关系不足、设备类型无法确认、需要跨网段拓扑关系。
+
+原则：
+
+1. 不应直接依赖高级发现替代基础发现。
+2. 高级发现只用于补充识别精度、链路发现和邻居推断。
+3. 高级发现失败不能影响基础发现结果写入。
+4. 每一层都必须有 timeout、错误隔离和脱敏错误记录。
+5. SSH 仍默认关闭；启用前必须确认命令只读。
+6. 真实测试报告必须记录本次启用了哪些发现层级。
+
 ### 多网段扫描规则
 
 `ScanConfig.targets` 支持多个目标，每个目标可以是单个 IP 或 CIDR。
@@ -345,6 +636,26 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 | IP 网段推断 | 0.3 |
 
 当前阶段若没有 LLDP/CDP，可以先只写入设备节点和接口节点，链路功能后续扩展。
+
+### 路由表、ARP 表和 MAC 表增强
+
+当 LLDP/CDP 不可用或覆盖不足时，可以使用路由表、ARP 表和 MAC 地址表进行补充发现。
+
+使用原则：
+
+1. 路由表用于发现三层邻接关系、下一跳和跨网段路径线索。
+2. ARP 表用于发现本地二层网段内的 IP/MAC 候选主机。
+3. MAC 地址表用于发现交换机端口上的二层终端或下联设备。
+4. 这些数据属于推断来源，置信度低于 LLDP/CDP。
+5. 推断链路必须标记 `discovery_method`，例如 `route_table`、`arp_table`、`mac_table`。
+6. 推断链路不得覆盖 LLDP/CDP 发现的高置信度链路。
+7. 推断出的未知主机可以进入候选设备流程，但应保守设置为 `device_type = unknown`，直到有更多证据。
+
+当前阶段优先级：
+
+1. 先实现基础发现和 SNMP 采集。
+2. 再实现 LLDP/CDP。
+3. 再考虑路由表、ARP 表、MAC 表推断。
 
 ## Neo4j 图模型
 
@@ -404,6 +715,8 @@ MERGE (d:Device {device_id: $device_id})
 SET d.ip = $ip,
     d.hostname = $hostname,
     d.device_type = $device_type,
+    d.endpoint_type = $endpoint_type,
+    d.deployment_type = $deployment_type,
     d.vendor = $vendor,
     d.model = $model,
     d.os_version = $os_version,

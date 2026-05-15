@@ -13,6 +13,7 @@ from services.topology_discovery.snmp import (
     SYS_NAME_OID,
     SYS_OBJECT_ID_OID,
     SnmpError,
+    _raise_for_snmp_error,
     collect_snmp_device_info,
 )
 
@@ -83,8 +84,49 @@ def test_collect_snmp_device_info_auth_failure_is_sanitized() -> None:
     )
 
     assert result.success is False
-    assert result.error == "snmp request failed"
+    assert result.error == "snmp_auth_failed"
     assert "dummy-community" not in str(result)
+
+
+def test_collect_snmp_device_info_transport_failure_is_classified() -> None:
+    result = collect_snmp_device_info(
+        _host(),
+        _config(),
+        snmp_get_func=_transport_failure_get,
+        snmp_walk_func=_mock_walk,
+    )
+
+    assert result.success is False
+    assert result.error == "snmp_transport_unreachable"
+
+
+def test_collect_snmp_device_info_unsupported_oid_is_classified() -> None:
+    result = collect_snmp_device_info(
+        _host(),
+        _config(),
+        snmp_get_func=_unsupported_oid_get,
+        snmp_walk_func=_mock_walk,
+    )
+
+    assert result.success is False
+    assert result.error == "snmp_oid_unsupported"
+
+
+def test_raise_for_snmp_error_classifies_low_level_errors() -> None:
+    cases = {
+        "No response received before timeout": "snmp_timeout",
+        "authorization error": "snmp_auth_failed",
+        "network is unreachable": "snmp_transport_unreachable",
+        "No Such Object": "snmp_oid_unsupported",
+        "failed to decode response": "snmp_parse_error",
+        "unexpected failure": "snmp_unknown_error",
+    }
+
+    for message, expected in cases.items():
+        try:
+            _raise_for_snmp_error(message, None)
+        except SnmpError as exc:
+            assert str(exc) == expected
 
 
 def test_collect_snmp_device_info_missing_oid_keeps_partial_raw_data() -> None:
@@ -135,7 +177,15 @@ def _timeout_get(ip: str, config: SnmpConfig, oid: str) -> str | None:
 
 
 def _auth_failure_get(ip: str, config: SnmpConfig, oid: str) -> str | None:
-    raise SnmpError("snmp request failed")
+    raise SnmpError("snmp_auth_failed")
+
+
+def _transport_failure_get(ip: str, config: SnmpConfig, oid: str) -> str | None:
+    raise SnmpError("snmp_transport_unreachable")
+
+
+def _unsupported_oid_get(ip: str, config: SnmpConfig, oid: str) -> str | None:
+    raise SnmpError("snmp_oid_unsupported")
 
 
 def _mock_walk(ip: str, config: SnmpConfig, oid: str) -> dict[str, str]:

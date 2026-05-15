@@ -131,12 +131,28 @@ python -m pip install -U pip
 依赖配置完成后，常用命令：
 
 ```powershell
-pytest
-ruff check .
-mypy .
+conda run -n topology-discovery-lab python -m pytest
+conda run -n topology-discovery-lab python -m ruff check .
+conda run -n topology-discovery-lab python -m mypy .
 ```
 
-当前仓库仍处于项目骨架阶段，`pyproject.toml` 和代码模块会在后续任务中逐步补齐。
+## 最小运行方式
+
+真实运行配置不提交到 Git。先复制样例文件到本地配置：
+
+```powershell
+Copy-Item config/config.example.yaml config/config.yaml
+```
+
+按本地实验环境修改 `config/config.yaml` 中的扫描目标、SNMP、SSH 和 Neo4j 参数后运行：
+
+```powershell
+conda run -n topology-discovery-lab python -m services.topology_discovery.main --config config/config.yaml
+```
+
+程序只输出聚合统计，不输出完整配置、密码、SNMP community 或 SSH 凭据。
+
+当前阶段 SSH 默认关闭。启用 SSH 前应确认配置中的命令均为只读命令，例如 `show version` 或 `show lldp neighbors detail`。
 
 ## 安全提醒
 

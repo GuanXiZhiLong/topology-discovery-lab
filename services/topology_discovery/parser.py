@@ -4,28 +4,53 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from ipaddress import ip_address, ip_network
+from typing import TypedDict
 
 from services.topology_discovery.models import (
     AliveHost,
+    DeploymentType,
     DeviceNode,
     DeviceType,
     DiscoveryError,
+    EndpointType,
     InterfaceNode,
     NetworkSegmentNode,
     SnmpDeviceInfo,
     SnmpInterfaceInfo,
+    SshDeviceInfo,
     TopologySnapshot,
+)
+
+
+class SysObjectIdMapping(TypedDict):
+    prefix: str
+    vendor: str
+    device_type: DeviceType
+    deployment_type: DeploymentType
+    model_family: str
+
+
+SYS_OBJECT_ID_MAPPINGS: tuple[SysObjectIdMapping, ...] = (
+    {
+        "prefix": "1.3.6.1.4.1.8072",
+        "vendor": "net-snmp",
+        "device_type": "server",
+        "deployment_type": "unknown",
+        "model_family": "net-snmp",
+    },
 )
 
 
 def build_topology_snapshot(
     alive_hosts: list[AliveHost],
     snmp_results: list[SnmpDeviceInfo],
+    ssh_results: list[SshDeviceInfo] | None = None,
     scan_targets: list[str] | None = None,
 ) -> TopologySnapshot:
     """Build a topology snapshot from protocol collection results."""
 
     started_at = datetime.now(UTC)
+    resolved_ssh_results = ssh_results or []
     resolved_scan_targets = scan_targets or _scan_targets_from_alive_hosts(alive_hosts)
     devices = _deduplicate_devices(
         [
@@ -41,7 +66,11 @@ def build_topology_snapshot(
             for interface in _interfaces_from_snmp_result(snmp_result, started_at)
         ]
     )
-    errors = _errors_from_alive_hosts(alive_hosts) + _errors_from_snmp_results(snmp_results)
+    errors = (
+        _errors_from_alive_hosts(alive_hosts)
+        + _errors_from_snmp_results(snmp_results)
+        + _errors_from_ssh_results(resolved_ssh_results)
+    )
     finished_at = datetime.now(UTC)
 
     return TopologySnapshot(
@@ -82,14 +111,17 @@ def _devices_from_snmp_results(
     for result in snmp_results:
         if not result.success:
             continue
+        object_id_mapping = _sys_object_id_mapping(result.sys_object_id)
         devices.append(
             DeviceNode(
                 device_id=_device_id(result.ip),
                 ip=result.ip,
                 hostname=result.sys_name,
-                device_type=_identify_device_type(result.sys_descr),
-                vendor=None,
-                model=None,
+                device_type=_identify_device_type(result.sys_descr, result.sys_object_id),
+                endpoint_type=_identify_endpoint_type(result.sys_descr, result.sys_object_id),
+                deployment_type=_identify_deployment_type(result.sys_descr, result.sys_object_id),
+                vendor=object_id_mapping.get("vendor") if object_id_mapping else None,
+                model=object_id_mapping.get("model_family") if object_id_mapping else None,
                 os_version=None,
                 sys_descr=result.sys_descr,
                 sys_object_id=result.sys_object_id,
@@ -149,6 +181,19 @@ def _errors_from_snmp_results(snmp_results: list[SnmpDeviceInfo]) -> list[Discov
     ]
 
 
+def _errors_from_ssh_results(ssh_results: list[SshDeviceInfo]) -> list[DiscoveryError]:
+    return [
+        DiscoveryError(
+            target=result.ip,
+            stage="ssh",
+            message=result.error or "ssh collection failed",
+            recoverable=True,
+        )
+        for result in ssh_results
+        if not result.success
+    ]
+
+
 def _deduplicate_devices(devices: list[DeviceNode]) -> list[DeviceNode]:
     by_device_id: dict[str, DeviceNode] = {}
     for device in devices:
@@ -197,7 +242,14 @@ def _scan_targets_from_alive_hosts(alive_hosts: list[AliveHost]) -> list[str]:
     return scan_targets
 
 
-def _identify_device_type(sys_descr: str | None) -> DeviceType:
+def _identify_device_type(
+    sys_descr: str | None,
+    sys_object_id: str | None = None,
+) -> DeviceType:
+    object_id_mapping = _sys_object_id_mapping(sys_object_id)
+    if object_id_mapping is not None:
+        return object_id_mapping["device_type"]
+
     if not sys_descr:
         return "unknown"
 
@@ -210,7 +262,67 @@ def _identify_device_type(sys_descr: str | None) -> DeviceType:
         return "firewall"
     if "wireless" in normalized or " ap " in f" {normalized} ":
         return "wireless_ap"
+    if "windows server" in normalized or "server" in normalized or "linux" in normalized:
+        return "server"
+    if any(marker in normalized for marker in ("windows", "macos", "android", "ios")):
+        return "endpoint"
     return "unknown"
+
+
+def _identify_endpoint_type(
+    sys_descr: str | None,
+    sys_object_id: str | None = None,
+) -> EndpointType | None:
+    if _identify_device_type(sys_descr, sys_object_id) != "endpoint":
+        return None
+    if not sys_descr:
+        return "unknown"
+
+    normalized = sys_descr.casefold()
+    if "android" in normalized or "ios" in normalized:
+        return "phone"
+    if "tablet" in normalized or "ipad" in normalized:
+        return "tablet"
+    if "workstation" in normalized:
+        return "workstation"
+    if "laptop" in normalized or "notebook" in normalized:
+        return "laptop"
+    if "windows" in normalized or "macos" in normalized:
+        return "pc"
+    return "unknown"
+
+
+def _identify_deployment_type(
+    sys_descr: str | None,
+    sys_object_id: str | None = None,
+) -> DeploymentType:
+    object_id_mapping = _sys_object_id_mapping(sys_object_id)
+    if object_id_mapping is not None:
+        return object_id_mapping["deployment_type"]
+
+    if not sys_descr:
+        return "unknown"
+
+    normalized = sys_descr.casefold()
+    if any(
+        marker in normalized
+        for marker in ("vmware", "virtual", "kvm", "qemu", "hyper-v", "virtualbox")
+    ):
+        return "virtual"
+    return "unknown"
+
+
+def _sys_object_id_mapping(sys_object_id: str | None) -> SysObjectIdMapping | None:
+    if not sys_object_id:
+        return None
+    matches = [
+        mapping
+        for mapping in SYS_OBJECT_ID_MAPPINGS
+        if sys_object_id == mapping["prefix"] or sys_object_id.startswith(f"{mapping['prefix']}.")
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda mapping: len(mapping["prefix"]))
 
 
 def _device_id(ip: str) -> str:

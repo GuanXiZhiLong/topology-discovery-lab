@@ -13,6 +13,8 @@ from services.topology_discovery.models import (
     InterfaceNode,
     LinkEdge,
     NetworkSegmentNode,
+    SshCommandResult,
+    SshDeviceInfo,
     TopologySnapshot,
 )
 
@@ -80,6 +82,63 @@ def test_device_node_accepts_partial_status() -> None:
     assert device.status == "partial"
 
 
+def test_device_node_accepts_endpoint_type_for_endpoint() -> None:
+    device = DeviceNode(
+        device_id="device:192.0.2.1",
+        ip="192.0.2.1",
+        device_type="endpoint",
+        endpoint_type="pc",
+        deployment_type="physical",
+        status="online",
+        last_seen=NOW,
+        source="snmp",
+    )
+
+    assert device.endpoint_type == "pc"
+    assert device.deployment_type == "physical"
+
+
+def test_device_node_defaults_endpoint_type_for_endpoint() -> None:
+    device = DeviceNode(
+        device_id="device:192.0.2.1",
+        ip="192.0.2.1",
+        device_type="endpoint",
+        status="online",
+        last_seen=NOW,
+        source="snmp",
+    )
+
+    assert device.endpoint_type == "unknown"
+
+
+def test_device_node_rejects_endpoint_type_for_non_endpoint() -> None:
+    with pytest.raises(ValidationError):
+        DeviceNode(
+            device_id="device:192.0.2.1",
+            ip="192.0.2.1",
+            device_type="switch",
+            endpoint_type="pc",
+            status="online",
+            last_seen=NOW,
+            source="snmp",
+        )
+
+
+def test_device_node_rejects_invalid_deployment_type() -> None:
+    data: dict[str, Any] = {
+        "device_id": "device:192.0.2.1",
+        "ip": "192.0.2.1",
+        "device_type": "unknown",
+        "deployment_type": "cloud",
+        "status": "online",
+        "last_seen": NOW,
+        "source": "snmp",
+    }
+
+    with pytest.raises(ValidationError):
+        DeviceNode(**data)
+
+
 def test_device_node_rejects_missing_required_field() -> None:
     data: dict[str, Any] = {
         "device_id": "device:192.0.2.1",
@@ -119,6 +178,28 @@ def test_interface_node_accepts_valid_data() -> None:
 
     assert interface.if_index == 1
     assert interface.speed_bps == 1_000_000_000
+
+
+def test_ssh_device_info_accepts_command_results() -> None:
+    result = SshDeviceInfo(
+        ip="192.0.2.1",
+        success=True,
+        commands=[
+            SshCommandResult(
+                name="show_version",
+                command="show version",
+                success=True,
+                output="Example OS",
+            )
+        ],
+    )
+
+    assert result.commands[0].name == "show_version"
+
+
+def test_ssh_device_info_rejects_invalid_ip() -> None:
+    with pytest.raises(ValidationError):
+        SshDeviceInfo(ip="not-an-ip", success=False, error="ssh_request_failed")
 
 
 def test_link_edge_rejects_invalid_confidence() -> None:

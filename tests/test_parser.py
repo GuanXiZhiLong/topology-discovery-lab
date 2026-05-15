@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from services.topology_discovery.models import AliveHost, SnmpDeviceInfo, SnmpInterfaceInfo
+from services.topology_discovery.models import (
+    AliveHost,
+    SnmpDeviceInfo,
+    SnmpInterfaceInfo,
+    SshDeviceInfo,
+)
 from services.topology_discovery.parser import build_topology_snapshot
 
 
@@ -93,12 +98,25 @@ def test_build_topology_snapshot_records_icmp_error() -> None:
     assert snapshot.errors[0].message == "unreachable"
 
 
+def test_build_topology_snapshot_records_ssh_failure() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[AliveHost(ip="192.0.2.1", reachable=True, discovered_by="icmp")],
+        snmp_results=[],
+        ssh_results=[SshDeviceInfo(ip="192.0.2.1", success=False, error="ssh_timeout")],
+    )
+
+    assert snapshot.errors[0].stage == "ssh"
+    assert snapshot.errors[0].message == "ssh_timeout"
+
+
 def test_build_topology_snapshot_identifies_device_types() -> None:
     descriptions = {
         "Example Switch": "switch",
         "Example Router": "router",
         "Example Firewall": "firewall",
         "Example Wireless AP": "wireless_ap",
+        "Example Linux Server": "server",
+        "Example Windows 11": "endpoint",
         "Example Appliance": "unknown",
     }
 
@@ -109,6 +127,35 @@ def test_build_topology_snapshot_identifies_device_types() -> None:
         )
 
         assert snapshot.devices[0].device_type == expected_type
+
+
+def test_build_topology_snapshot_identifies_endpoint_and_deployment_types() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[_snmp_result(ip="192.0.2.1", sys_descr="Windows 11 VMware")],
+    )
+
+    assert snapshot.devices[0].device_type == "endpoint"
+    assert snapshot.devices[0].endpoint_type == "pc"
+    assert snapshot.devices[0].deployment_type == "virtual"
+
+
+def test_build_topology_snapshot_uses_sys_object_id_mapping_before_sys_descr() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                sys_descr="Example Appliance",
+                sys_object_id="1.3.6.1.4.1.8072.3.2.10",
+            )
+        ],
+    )
+
+    assert snapshot.devices[0].device_type == "server"
+    assert snapshot.devices[0].vendor == "net-snmp"
+    assert snapshot.devices[0].model == "net-snmp"
+    assert snapshot.devices[0].deployment_type == "unknown"
 
 
 def test_build_topology_snapshot_uses_timezone_aware_timestamps() -> None:
@@ -157,6 +204,7 @@ def test_build_topology_snapshot_derives_scan_targets_from_alive_hosts() -> None
 def _snmp_result(
     ip: str = "192.0.2.1",
     sys_descr: str = "Example Switch",
+    sys_object_id: str = "1.3.6.1.4.1.999",
     interfaces: list[SnmpInterfaceInfo] | None = None,
 ) -> SnmpDeviceInfo:
     return SnmpDeviceInfo(
@@ -164,7 +212,7 @@ def _snmp_result(
         success=True,
         sys_name="example-device",
         sys_descr=sys_descr,
-        sys_object_id="1.3.6.1.4.1.999",
+        sys_object_id=sys_object_id,
         interfaces=interfaces or [_snmp_interface()],
     )
 

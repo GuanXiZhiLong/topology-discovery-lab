@@ -40,6 +40,9 @@ tests/
 
 - `AliveHost`。
 - `DeviceNode`。
+- `DeviceNode.device_type` 合法值。
+- `DeviceNode.endpoint_type` 仅用于终端设备。
+- `DeviceNode.deployment_type` 合法值。
 - `InterfaceNode`。
 - `LinkEdge`。
 - `TopologySnapshot`。
@@ -142,6 +145,20 @@ dummy-community
 初期目标：`>= 80%`
 
 链路发现准确率在 LLDP/CDP 实现前不强制；LLDP/CDP 实现后目标为 `>= 90%`。
+
+真实测试网段质量指标应额外记录：
+
+| 指标 | 说明 |
+| --- | --- |
+| 存活率 | `reachable_hosts / scanned_hosts` |
+| SNMP 成功率 | `snmp_successes / reachable_hosts` |
+| 设备识别率 | `identified_devices / snmp_successes`，优先用于评估识别规则 |
+| unknown 覆盖率 | `unknown_devices / devices` |
+| offline unknown 数量 | 用于区分不可达导致的 unknown |
+| partial unknown 数量 | 用于区分可达但协议采集失败导致的 unknown |
+| 写入覆盖率 | `devices_written / scanned_hosts` |
+
+当 SNMP 成功率较低时，不应简单判定设备识别规则失败，应先区分协议采集失败和识别规则覆盖不足。
 
 ## PR 最低合格标准
 

@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
+from neo4j.exceptions import ConfigurationError
 
 from services.topology_discovery.config import Neo4jConfig
 from services.topology_discovery.models import (
@@ -38,6 +39,8 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
     device_link_query, device_link_params = driver.session_obj.runs[4]
 
     assert "MERGE (d:Device {device_id: $device_id})" in device_query
+    assert "d.endpoint_type = $endpoint_type" in device_query
+    assert "d.deployment_type = $deployment_type" in device_query
     assert "MERGE (d:Device {device_id: $device_id})" in second_device_query
     assert "MERGE (i:Interface {interface_id: $interface_id})" in interface_query
     assert "MERGE (d)-[:HAS_INTERFACE]->(i)" in interface_query
@@ -48,6 +51,8 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
         device_link_query
     )
     assert device_params["device_id"] == "device:192.0.2.1"
+    assert device_params["endpoint_type"] is None
+    assert device_params["deployment_type"] == "unknown"
     assert interface_params["interface_id"] == "interface:device:192.0.2.1:1"
     assert interface_link_params["source_interface_id"] == "interface:device:192.0.2.1:1"
     assert device_link_params["source_device_id"] == "device:192.0.2.1"
@@ -64,6 +69,33 @@ def test_save_snapshot_uses_configured_database() -> None:
     repository.save_snapshot(TopologySnapshot(snapshot_id="empty", started_at=NOW))
 
     assert driver.database == "topology"
+
+
+def test_save_snapshot_falls_back_to_default_database_when_selection_is_unsupported() -> None:
+    driver = DatabaseSelectionUnsupportedDriver()
+    repository = Neo4jTopologyRepository(
+        _config(database="neo4j"),
+        driver_factory=_factory(driver),
+    )
+
+    repository.save_snapshot(
+        TopologySnapshot(
+            snapshot_id="snapshot-1",
+            started_at=NOW,
+            devices=[
+                DeviceNode(
+                    device_id="device:192.0.2.1",
+                    ip="192.0.2.1",
+                    device_type="unknown",
+                    status="partial",
+                    last_seen=NOW,
+                    source="icmp",
+                )
+            ],
+        )
+    )
+
+    assert driver.session_databases == ["neo4j", None]
 
 
 def test_save_snapshot_writes_network_segments_and_memberships() -> None:
@@ -286,6 +318,26 @@ class FakeDriver:
 class FailingDriver(FakeDriver):
     def verify_connectivity(self) -> None:
         raise RuntimeError("authentication failed for dummy-password")
+
+
+class DatabaseSelectionUnsupportedDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.session_databases: list[str | None] = []
+
+    def session(self, **kwargs: Any) -> FakeSession:
+        database = kwargs.get("database")
+        self.session_databases.append(database)
+        if database is not None:
+            return DatabaseSelectionUnsupportedSession()
+        return self.session_obj
+
+
+class DatabaseSelectionUnsupportedSession(FakeSession):
+    def run(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
+        raise ConfigurationError(
+            "Database name parameter for selecting database is not supported"
+        )
 
 
 def _factory(driver: FakeDriver) -> Callable[[str, tuple[str, str]], Driver]:

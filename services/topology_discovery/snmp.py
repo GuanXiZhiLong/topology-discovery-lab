@@ -167,9 +167,9 @@ async def _snmp_walk_async(ip: str, config: SnmpConfig, oid: str) -> dict[str, s
 
 def _raise_for_snmp_error(error_indication: Any, error_status: Any) -> None:
     if error_indication:
-        raise SnmpError("snmp request failed")
+        raise SnmpError(_classify_snmp_error(str(error_indication)))
     if error_status:
-        raise SnmpError("snmp request failed")
+        raise SnmpError(_classify_snmp_error(str(error_status)))
 
 
 def _failed_result(ip: str, error: str) -> SnmpDeviceInfo:
@@ -180,6 +180,26 @@ def _sanitize_error(exc: Exception) -> str:
     if isinstance(exc, SnmpError):
         return str(exc)
     return exc.__class__.__name__
+
+
+def _classify_snmp_error(message: str) -> str:
+    normalized = message.casefold()
+    if "timeout" in normalized or "timed out" in normalized or "no response" in normalized:
+        return "snmp_timeout"
+    if "auth" in normalized or "authorization" in normalized or "community" in normalized:
+        return "snmp_auth_failed"
+    if (
+        "unreachable" in normalized
+        or "network is unreachable" in normalized
+        or "connection refused" in normalized
+        or "host down" in normalized
+    ):
+        return "snmp_transport_unreachable"
+    if "no such" in normalized or "nosuch" in normalized or "unknown object" in normalized:
+        return "snmp_oid_unsupported"
+    if "parse" in normalized or "decode" in normalized:
+        return "snmp_parse_error"
+    return "snmp_unknown_error"
 
 
 def _oid_suffix(oid: str) -> int | None:

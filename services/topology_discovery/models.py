@@ -8,8 +8,22 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-DeviceType = Literal["router", "switch", "firewall", "server", "wireless_ap", "unknown"]
+DeviceType = Literal[
+    "router",
+    "switch",
+    "firewall",
+    "wireless_ap",
+    "server",
+    "endpoint",
+    "printer",
+    "storage",
+    "camera",
+    "iot",
+    "unknown",
+]
 DeviceStatus = Literal["online", "offline", "unknown", "partial"]
+EndpointType = Literal["pc", "laptop", "workstation", "phone", "tablet", "unknown"]
+DeploymentType = Literal["physical", "virtual", "unknown"]
 
 
 class DiscoveryBaseModel(BaseModel):
@@ -87,6 +101,31 @@ class SnmpDeviceInfo(DiscoveryBaseModel):
         return value
 
 
+class SshCommandResult(DiscoveryBaseModel):
+    """Raw output collected from a single SSH command."""
+
+    name: str
+    command: str
+    success: bool
+    output: str | None = None
+    error: str | None = None
+
+
+class SshDeviceInfo(DiscoveryBaseModel):
+    """Raw supplemental information collected through SSH."""
+
+    ip: str
+    success: bool
+    commands: list[SshCommandResult] = Field(default_factory=list)
+    error: str | None = None
+
+    @field_validator("ip")
+    @classmethod
+    def validate_ip(cls, value: str) -> str:
+        ip_address(value)
+        return value
+
+
 class DeviceNode(DiscoveryBaseModel):
     """A network device node in a topology snapshot."""
 
@@ -94,6 +133,8 @@ class DeviceNode(DiscoveryBaseModel):
     ip: str
     hostname: str | None = None
     device_type: DeviceType
+    endpoint_type: EndpointType | None = None
+    deployment_type: DeploymentType = "unknown"
     vendor: str | None = None
     model: str | None = None
     os_version: str | None = None
@@ -108,6 +149,14 @@ class DeviceNode(DiscoveryBaseModel):
     def validate_ip(cls, value: str) -> str:
         ip_address(value)
         return value
+
+    @model_validator(mode="after")
+    def validate_endpoint_type(self) -> DeviceNode:
+        if self.device_type == "endpoint" and self.endpoint_type is None:
+            self.endpoint_type = "unknown"
+        if self.device_type != "endpoint" and self.endpoint_type is not None:
+            raise ValueError("endpoint_type must be None for non-endpoint devices")
+        return self
 
 
 class InterfaceNode(DiscoveryBaseModel):

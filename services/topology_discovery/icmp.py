@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ipaddress import ip_address, ip_network
 from time import perf_counter
@@ -12,6 +13,8 @@ from scapy.sendrecv import sr1
 
 from services.topology_discovery.config import ScanConfig
 from services.topology_discovery.models import AliveHost
+
+logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 
 class Probe(Protocol):
