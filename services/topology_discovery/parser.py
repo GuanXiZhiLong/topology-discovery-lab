@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from ipaddress import ip_address, ip_network
+from typing import TypedDict
 
 from services.topology_discovery.models import (
     AliveHost,
@@ -18,6 +19,25 @@ from services.topology_discovery.models import (
     SnmpInterfaceInfo,
     SshDeviceInfo,
     TopologySnapshot,
+)
+
+
+class SysObjectIdMapping(TypedDict):
+    prefix: str
+    vendor: str
+    device_type: DeviceType
+    deployment_type: DeploymentType
+    model_family: str
+
+
+SYS_OBJECT_ID_MAPPINGS: tuple[SysObjectIdMapping, ...] = (
+    {
+        "prefix": "1.3.6.1.4.1.8072",
+        "vendor": "net-snmp",
+        "device_type": "server",
+        "deployment_type": "unknown",
+        "model_family": "net-snmp",
+    },
 )
 
 
@@ -91,16 +111,17 @@ def _devices_from_snmp_results(
     for result in snmp_results:
         if not result.success:
             continue
+        object_id_mapping = _sys_object_id_mapping(result.sys_object_id)
         devices.append(
             DeviceNode(
                 device_id=_device_id(result.ip),
                 ip=result.ip,
                 hostname=result.sys_name,
-                device_type=_identify_device_type(result.sys_descr),
-                endpoint_type=_identify_endpoint_type(result.sys_descr),
-                deployment_type=_identify_deployment_type(result.sys_descr),
-                vendor=None,
-                model=None,
+                device_type=_identify_device_type(result.sys_descr, result.sys_object_id),
+                endpoint_type=_identify_endpoint_type(result.sys_descr, result.sys_object_id),
+                deployment_type=_identify_deployment_type(result.sys_descr, result.sys_object_id),
+                vendor=object_id_mapping.get("vendor") if object_id_mapping else None,
+                model=object_id_mapping.get("model_family") if object_id_mapping else None,
                 os_version=None,
                 sys_descr=result.sys_descr,
                 sys_object_id=result.sys_object_id,
@@ -221,7 +242,14 @@ def _scan_targets_from_alive_hosts(alive_hosts: list[AliveHost]) -> list[str]:
     return scan_targets
 
 
-def _identify_device_type(sys_descr: str | None) -> DeviceType:
+def _identify_device_type(
+    sys_descr: str | None,
+    sys_object_id: str | None = None,
+) -> DeviceType:
+    object_id_mapping = _sys_object_id_mapping(sys_object_id)
+    if object_id_mapping is not None:
+        return object_id_mapping["device_type"]
+
     if not sys_descr:
         return "unknown"
 
@@ -241,8 +269,11 @@ def _identify_device_type(sys_descr: str | None) -> DeviceType:
     return "unknown"
 
 
-def _identify_endpoint_type(sys_descr: str | None) -> EndpointType | None:
-    if _identify_device_type(sys_descr) != "endpoint":
+def _identify_endpoint_type(
+    sys_descr: str | None,
+    sys_object_id: str | None = None,
+) -> EndpointType | None:
+    if _identify_device_type(sys_descr, sys_object_id) != "endpoint":
         return None
     if not sys_descr:
         return "unknown"
@@ -261,7 +292,14 @@ def _identify_endpoint_type(sys_descr: str | None) -> EndpointType | None:
     return "unknown"
 
 
-def _identify_deployment_type(sys_descr: str | None) -> DeploymentType:
+def _identify_deployment_type(
+    sys_descr: str | None,
+    sys_object_id: str | None = None,
+) -> DeploymentType:
+    object_id_mapping = _sys_object_id_mapping(sys_object_id)
+    if object_id_mapping is not None:
+        return object_id_mapping["deployment_type"]
+
     if not sys_descr:
         return "unknown"
 
@@ -272,6 +310,19 @@ def _identify_deployment_type(sys_descr: str | None) -> DeploymentType:
     ):
         return "virtual"
     return "unknown"
+
+
+def _sys_object_id_mapping(sys_object_id: str | None) -> SysObjectIdMapping | None:
+    if not sys_object_id:
+        return None
+    matches = [
+        mapping
+        for mapping in SYS_OBJECT_ID_MAPPINGS
+        if sys_object_id == mapping["prefix"] or sys_object_id.startswith(f"{mapping['prefix']}.")
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda mapping: len(mapping["prefix"]))
 
 
 def _device_id(ip: str) -> str:

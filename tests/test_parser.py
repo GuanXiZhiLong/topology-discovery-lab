@@ -140,6 +140,24 @@ def test_build_topology_snapshot_identifies_endpoint_and_deployment_types() -> N
     assert snapshot.devices[0].deployment_type == "virtual"
 
 
+def test_build_topology_snapshot_uses_sys_object_id_mapping_before_sys_descr() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                sys_descr="Example Appliance",
+                sys_object_id="1.3.6.1.4.1.8072.3.2.10",
+            )
+        ],
+    )
+
+    assert snapshot.devices[0].device_type == "server"
+    assert snapshot.devices[0].vendor == "net-snmp"
+    assert snapshot.devices[0].model == "net-snmp"
+    assert snapshot.devices[0].deployment_type == "unknown"
+
+
 def test_build_topology_snapshot_uses_timezone_aware_timestamps() -> None:
     snapshot = build_topology_snapshot(
         alive_hosts=[],
@@ -186,6 +204,7 @@ def test_build_topology_snapshot_derives_scan_targets_from_alive_hosts() -> None
 def _snmp_result(
     ip: str = "192.0.2.1",
     sys_descr: str = "Example Switch",
+    sys_object_id: str = "1.3.6.1.4.1.999",
     interfaces: list[SnmpInterfaceInfo] | None = None,
 ) -> SnmpDeviceInfo:
     return SnmpDeviceInfo(
@@ -193,7 +212,7 @@ def _snmp_result(
         success=True,
         sys_name="example-device",
         sys_descr=sys_descr,
-        sys_object_id="1.3.6.1.4.1.999",
+        sys_object_id=sys_object_id,
         interfaces=interfaces or [_snmp_interface()],
     )
 
