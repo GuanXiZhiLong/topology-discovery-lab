@@ -8,6 +8,7 @@ from ipaddress import ip_address, ip_network
 from typing import Any, Protocol, cast
 
 from neo4j import GraphDatabase
+from neo4j.exceptions import ConfigurationError
 
 from services.topology_discovery.config import Neo4jConfig
 from services.topology_discovery.models import (
@@ -89,21 +90,37 @@ class Neo4jTopologyRepository:
 
         driver = self._require_driver()
         try:
-            with driver.session(database=self._config.database) as session:
-                for device in snapshot.devices:
-                    self._upsert_device(session, device)
-                for segment in snapshot.network_segments:
-                    self._upsert_network_segment(session, segment)
-                for device in snapshot.devices:
-                    for segment in snapshot.network_segments:
-                        if _device_belongs_to_segment(device, segment):
-                            self._upsert_device_segment_relationship(session, device, segment)
-                for interface in snapshot.interfaces:
-                    self._upsert_interface(session, interface)
-                for link in snapshot.links:
-                    self._upsert_link(session, link)
+            self._save_snapshot_with_session(driver, snapshot, database=self._config.database)
+        except ConfigurationError as exc:
+            if not _is_database_selection_unsupported(exc):
+                raise Neo4jRepositoryError("failed to save topology snapshot") from exc
+            try:
+                self._save_snapshot_with_session(driver, snapshot, database=None)
+            except Exception as fallback_exc:  # noqa: BLE001
+                raise Neo4jRepositoryError("failed to save topology snapshot") from fallback_exc
         except Exception as exc:  # noqa: BLE001
             raise Neo4jRepositoryError("failed to save topology snapshot") from exc
+
+    def _save_snapshot_with_session(
+        self,
+        driver: Driver,
+        snapshot: TopologySnapshot,
+        database: str | None,
+    ) -> None:
+        session_kwargs = {"database": database} if database is not None else {}
+        with driver.session(**session_kwargs) as session:
+            for device in snapshot.devices:
+                self._upsert_device(session, device)
+            for segment in snapshot.network_segments:
+                self._upsert_network_segment(session, segment)
+            for device in snapshot.devices:
+                for segment in snapshot.network_segments:
+                    if _device_belongs_to_segment(device, segment):
+                        self._upsert_device_segment_relationship(session, device, segment)
+            for interface in snapshot.interfaces:
+                self._upsert_interface(session, interface)
+            for link in snapshot.links:
+                self._upsert_link(session, link)
 
     def _require_driver(self) -> Driver:
         if self._driver is None:
@@ -289,3 +306,11 @@ def _device_belongs_to_segment(device: DeviceNode, segment: NetworkSegmentNode) 
     if segment.cidr is None:
         return device_ip == ip_address(segment.target)
     return device_ip in ip_network(segment.cidr, strict=False)
+
+
+def _is_database_selection_unsupported(exc: ConfigurationError) -> bool:
+    message = str(exc)
+    return (
+        "Database name parameter for selecting database is not supported" in message
+        or "does not support selecting database" in message
+    )

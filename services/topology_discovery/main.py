@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -76,9 +77,13 @@ def run_discovery(
 
     alive_hosts = scan_hosts(config.scan)
     reachable_hosts = [host for host in alive_hosts if host.reachable]
-    snmp_results = [collect_snmp(host, config.snmp) for host in reachable_hosts]
+    snmp_results = _collect_snmp_results(
+        reachable_hosts,
+        config,
+        collect_snmp,
+    )
     ssh_results = (
-        [collect_ssh(host, config.ssh) for host in reachable_hosts] if config.ssh.enabled else []
+        _collect_ssh_results(reachable_hosts, config, collect_ssh) if config.ssh.enabled else []
     )
 
     snapshot = build_topology_snapshot(
@@ -103,6 +108,70 @@ def run_discovery(
         links=len(snapshot.links),
         errors=len(snapshot.errors),
     )
+
+
+def _collect_snmp_results(
+    hosts: list[AliveHost],
+    config: AppConfig,
+    collect_snmp: SnmpCollector,
+) -> list[SnmpDeviceInfo]:
+    results_by_ip: dict[str, SnmpDeviceInfo] = {}
+    with ThreadPoolExecutor(max_workers=_max_workers(config, hosts)) as executor:
+        futures = {
+            executor.submit(collect_snmp, host, config.snmp): host
+            for host in hosts
+        }
+        for future in as_completed(futures):
+            host = futures[future]
+            try:
+                results_by_ip[host.ip] = future.result()
+            except TimeoutError:
+                results_by_ip[host.ip] = SnmpDeviceInfo(
+                    ip=host.ip,
+                    success=False,
+                    error="snmp_timeout",
+                )
+            except Exception as exc:  # noqa: BLE001
+                results_by_ip[host.ip] = SnmpDeviceInfo(
+                    ip=host.ip,
+                    success=False,
+                    error=exc.__class__.__name__,
+                )
+    return [results_by_ip[host.ip] for host in hosts]
+
+
+def _collect_ssh_results(
+    hosts: list[AliveHost],
+    config: AppConfig,
+    collect_ssh: SshCollector,
+) -> list[SshDeviceInfo]:
+    results_by_ip: dict[str, SshDeviceInfo] = {}
+    with ThreadPoolExecutor(max_workers=_max_workers(config, hosts)) as executor:
+        futures = {
+            executor.submit(collect_ssh, host, config.ssh): host
+            for host in hosts
+        }
+        for future in as_completed(futures):
+            host = futures[future]
+            try:
+                results_by_ip[host.ip] = future.result()
+            except TimeoutError:
+                results_by_ip[host.ip] = SshDeviceInfo(
+                    ip=host.ip,
+                    success=False,
+                    error="ssh_timeout",
+                )
+            except Exception as exc:  # noqa: BLE001
+                results_by_ip[host.ip] = SshDeviceInfo(
+                    ip=host.ip,
+                    success=False,
+                    error=exc.__class__.__name__,
+                )
+    return [results_by_ip[host.ip] for host in hosts]
+
+
+def _max_workers(config: AppConfig, hosts: list[AliveHost]) -> int:
+    return min(config.scan.max_concurrency, len(hosts)) or 1
 
 
 def main(argv: Sequence[str] | None = None) -> int:

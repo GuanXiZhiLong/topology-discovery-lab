@@ -95,6 +95,22 @@ def test_run_discovery_saves_partial_snapshot_when_snmp_fails() -> None:
     assert repository.saved_snapshot.devices[0].status == "partial"
 
 
+def test_run_discovery_converts_snmp_exception_to_structured_error() -> None:
+    repository = FakeRepository()
+
+    summary = run_discovery(
+        _config(),
+        scan_hosts=_scan_hosts,
+        collect_snmp=_raise_snmp_error,
+        repository_factory=lambda config: repository,
+    )
+
+    assert summary.snmp_successes == 0
+    assert summary.errors == 2
+    assert repository.saved_snapshot is not None
+    assert repository.saved_snapshot.errors[1].message == "RuntimeError"
+
+
 def test_run_discovery_closes_repository_when_save_fails() -> None:
     repository = FakeRepository(save_error=RuntimeError("write failed"))
 
@@ -200,6 +216,10 @@ def _collect_snmp_success(host: AliveHost, config: SnmpConfig) -> SnmpDeviceInfo
 
 def _collect_snmp_failure(host: AliveHost, config: SnmpConfig) -> SnmpDeviceInfo:
     return SnmpDeviceInfo(ip=host.ip, success=False, error="snmp_timeout")
+
+
+def _raise_snmp_error(host: AliveHost, config: SnmpConfig) -> SnmpDeviceInfo:
+    raise RuntimeError("snmp failed with dummy-community")
 
 
 def _collect_ssh_success(host: AliveHost, config: SshConfig) -> SshDeviceInfo:
