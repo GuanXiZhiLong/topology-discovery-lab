@@ -111,6 +111,8 @@ neo4j:
 - `ip: str`
 - `hostname: str | None`
 - `device_type: str`
+- `endpoint_type: str | None`
+- `deployment_type: str`
 - `vendor: str | None`
 - `model: str | None`
 - `os_version: str | None`
@@ -128,6 +130,12 @@ neo4j:
 | `offline` | 设备当前不可达，通常用于增量更新或离线标记。 |
 | `unknown` | 设备状态无法判断，或只有不完整的候选信息。 |
 | `partial` | 设备部分可发现，例如 ICMP 可达但 SNMP/SSH 部分失败，仍保留基础节点。 |
+
+`device_type` 表示设备在网络中的主要角色。
+
+`endpoint_type` 仅在 `device_type = "endpoint"` 时使用。非终端设备应设置为 `None`。
+
+`deployment_type` 表示设备部署形态，而不是网络角色。
 
 `device_id` 生成优先级：
 
@@ -234,24 +242,123 @@ segment:192.0.2.1
 
 错误阶段建议：`config`、`icmp`、`snmp`、`ssh`、`parse`、`neo4j`、`main`。
 
-## 设备类型识别
+## 设备识别设计
 
-初期设备类型：
+设备识别拆分为三个维度：
+
+1. `device_type`：设备在网络中的主要角色。
+2. `endpoint_type`：终端设备的细分类别。
+3. `deployment_type`：设备是物理、虚拟还是未知部署形态。
+
+不允许将这些维度组合成单个枚举，例如 `physical_switch`、`virtual_firewall`、`mobile_phone`。
+
+### 设备角色 `device_type`
+
+当前阶段推荐设备角色：
 
 - `router`
 - `switch`
 - `firewall`
-- `server`
 - `wireless_ap`
+- `server`
+- `endpoint`
+- `printer`
+- `storage`
+- `camera`
+- `iot`
 - `unknown`
 
-初期识别规则：
+初期最小实现可以只覆盖：
+
+```text
+router
+switch
+firewall
+wireless_ap
+server
+endpoint
+unknown
+```
+
+`device_type` 识别依据：
+
+1. SNMP `sysDescr`。
+2. SNMP `sysObjectID`。
+3. hostname 命名规则。
+4. MAC OUI。
+5. 接口数量和接口类型。
+6. LLDP/CDP 邻居信息。
+7. SSH `show version` 输出。
+
+初期简单规则：
 
 - `sysDescr` 包含 `Switch` -> `switch`
 - `sysDescr` 包含 `Router` -> `router`
 - `sysDescr` 包含 `Firewall` -> `firewall`
 - `sysDescr` 包含 `AP` 或 `Wireless` -> `wireless_ap`
+- `sysDescr` 包含 `Server`、`Linux`、`Windows Server` -> `server`
+- `sysDescr` 包含 `Windows`、`macOS`、`Android`、`iOS` -> `endpoint`
 - 其他 -> `unknown`
+
+### 终端类型 `endpoint_type`
+
+`endpoint_type` 仅用于 `device_type = "endpoint"` 的设备。
+
+推荐值：
+
+- `pc`
+- `laptop`
+- `workstation`
+- `phone`
+- `tablet`
+- `unknown`
+
+非终端设备应设置为 `None`。
+
+示例：
+
+```text
+device_type = endpoint
+endpoint_type = pc
+deployment_type = physical
+```
+
+```text
+device_type = firewall
+endpoint_type = None
+deployment_type = virtual
+```
+
+### 部署形态 `deployment_type`
+
+推荐值：
+
+- `physical`
+- `virtual`
+- `unknown`
+
+默认值：
+
+```text
+deployment_type = unknown
+```
+
+`deployment_type` 识别依据：
+
+1. `sysDescr` 包含 `VMware`、`Virtual`、`KVM`、`QEMU`、`Hyper-V`、`VirtualBox`。
+2. `sysObjectID` 属于已知虚拟化厂商或虚拟设备。
+3. MAC OUI 属于虚拟化厂商。
+4. `vendor`、`model` 明确显示虚拟设备。
+5. 接口描述包含虚拟网卡特征。
+
+可推断为 `physical` 的依据：
+
+1. SNMP 返回明确硬件型号。
+2. `sysObjectID` 匹配实体网络设备厂商。
+3. LLDP/CDP 能发现物理邻居。
+4. 接口形态符合物理交换机、路由器或防火墙。
+
+无法可靠判断时必须使用 `unknown`，不应强行猜测。
 
 ## SNMP 采集设计
 
@@ -404,6 +511,8 @@ MERGE (d:Device {device_id: $device_id})
 SET d.ip = $ip,
     d.hostname = $hostname,
     d.device_type = $device_type,
+    d.endpoint_type = $endpoint_type,
+    d.deployment_type = $deployment_type,
     d.vendor = $vendor,
     d.model = $model,
     d.os_version = $os_version,

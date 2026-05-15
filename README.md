@@ -89,6 +89,7 @@ topology-discovery-lab/
 - `docs/ARCHITECTURE.md`：项目边界、技术栈、目录结构、模块职责。
 - `docs/DESIGN.md`：配置模型、数据模型、协议采集、拓扑解析、Neo4j 图模型。
 - `docs/CODE_STYLE.md`：代码风格、接口命名、变量命名、错误处理和测试命名。
+- `docs/TESTING.md`：测试分层、真实测试网段联调、Neo4j 集成测试和验收标准。
 - `docs/RELIABILITY.md`：超时、重试、失败隔离、幂等写入。
 - `docs/SECURITY.md`：凭据安全、SNMP/SSH/Neo4j 安全、日志脱敏。
 - `docs/QUALITY_SCORE.md`：测试策略、质量标准、Review 检查清单。

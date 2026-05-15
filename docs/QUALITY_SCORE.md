@@ -11,6 +11,8 @@
 7. 外部连接失败必须有测试。
 8. Neo4j 写入逻辑应尽量可 mock。
 
+真实测试网段和测试 Neo4j 的联调策略见 `docs/TESTING.md`。默认 `pytest` 不应依赖真实网络或真实 Neo4j。
+
 ## 推荐测试文件
 
 ```text
@@ -38,6 +40,9 @@ tests/
 
 - `AliveHost`。
 - `DeviceNode`。
+- `DeviceNode.device_type` 合法值。
+- `DeviceNode.endpoint_type` 仅用于终端设备。
+- `DeviceNode.deployment_type` 合法值。
 - `InterfaceNode`。
 - `LinkEdge`。
 - `TopologySnapshot`。
