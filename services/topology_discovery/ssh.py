@@ -10,7 +10,16 @@ import paramiko
 from services.topology_discovery.config import SshConfig
 from services.topology_discovery.models import AliveHost, SshCommandResult, SshDeviceInfo
 
-READ_ONLY_PREFIXES = ("show ",)
+ALLOWED_READ_ONLY_COMMANDS = frozenset(
+    {
+        "show version",
+        "show interfaces",
+        "show lldp neighbors detail",
+        "show cdp neighbors detail",
+        "show ip arp",
+        "show mac address-table",
+    }
+)
 DANGEROUS_COMMAND_PREFIXES = (
     "configure",
     "configure terminal",
@@ -97,12 +106,12 @@ def is_read_only_ssh_command(command: str) -> bool:
         return False
     if any(separator in command for separator in COMMAND_SEPARATORS):
         return False
-    if not normalized.startswith(READ_ONLY_PREFIXES):
-        return False
-    return not any(
+    if any(
         normalized == prefix or normalized.startswith(f"{prefix} ")
         for prefix in DANGEROUS_COMMAND_PREFIXES
-    )
+    ):
+        return False
+    return normalized in ALLOWED_READ_ONLY_COMMANDS
 
 
 def _first_unsafe_command(commands: dict[str, str]) -> str | None:

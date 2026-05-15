@@ -85,10 +85,13 @@ def test_collect_ssh_device_info_request_failure_is_sanitized() -> None:
     assert "dummy-password" not in str(result)
 
 
-def test_is_read_only_ssh_command_allows_show_commands() -> None:
+def test_is_read_only_ssh_command_allows_whitelisted_show_commands() -> None:
     assert is_read_only_ssh_command("show version") is True
     assert is_read_only_ssh_command("show lldp neighbors detail") is True
+    assert is_read_only_ssh_command("show cdp neighbors detail") is True
     assert is_read_only_ssh_command("show interfaces") is True
+    assert is_read_only_ssh_command("show ip arp") is True
+    assert is_read_only_ssh_command("show mac address-table") is True
 
 
 def test_is_read_only_ssh_command_rejects_dangerous_commands() -> None:
@@ -96,6 +99,13 @@ def test_is_read_only_ssh_command_rejects_dangerous_commands() -> None:
     assert is_read_only_ssh_command("configure terminal") is False
     assert is_read_only_ssh_command("shutdown") is False
     assert is_read_only_ssh_command("show version; reload") is False
+
+
+def test_is_read_only_ssh_command_rejects_unlisted_show_commands() -> None:
+    assert is_read_only_ssh_command("show running-config") is False
+    assert is_read_only_ssh_command("show startup-config") is False
+    assert is_read_only_ssh_command("show users") is False
+    assert is_read_only_ssh_command("show tech-support") is False
 
 
 def _host() -> AliveHost:
