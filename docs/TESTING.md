@@ -221,6 +221,157 @@ RETURN 1 AS ok
 6. `NetworkSegment` 能表达每个扫描目标。
 7. `BELONGS_TO_SEGMENT` 能表达设备和网段归属。
 
+### 阶段 5.5：分层发现策略验证
+
+目标：验证系统先完成基础发现，再对信息不足的设备启用补充或高级发现方式。
+
+验证顺序：
+
+1. 仅启用基础发现和 SNMP，记录 `unknown`、`offline`、`partial` 分布。
+2. 对 `partial + unknown` 样本启用补充识别方式，例如 SSH 只读 `show version` 或 `sysObjectID` 映射。
+3. 对链路为 0 或邻居不足的设备启用 LLDP/CDP。
+4. 当 LLDP/CDP 不可用时，再评估路由表、ARP 表、MAC 地址表推断。
+
+验收：
+
+1. 基础发现结果不会因为高级发现失败而丢失。
+2. 补充识别只提升设备类型、部署形态或接口/邻居信息，不覆盖更高置信度来源。
+3. LLDP/CDP 发现的链路置信度高于路由表、ARP 表、MAC 表推断。
+4. 路由表、ARP 表、MAC 表推断结果必须标记发现方式。
+5. 测试报告必须记录每个阶段启用了哪些发现层级。
+
+## 测试结果报告归档
+
+每次真实测试网段联调后，必须输出固定结构的 Markdown 报告。
+
+报告目录：
+
+```text
+reports/real-world-testing/
+```
+
+推荐文件名：
+
+```text
+YYYY-MM-DD-<short-scenario>-assessment.md
+```
+
+示例：
+
+```text
+2026-05-15-discovery-assessment.md
+```
+
+报告必须脱敏，不允许记录真实设备 IP、真实账号、真实密码、SNMP community、Neo4j 密码或可还原真实拓扑关系的设备明细。
+
+允许记录聚合统计、脱敏错误类型、分支名、执行阶段、测试是否通过、设计侧需要评估的问题。
+
+### 报告固定结构
+
+每份真实测试报告应使用以下结构：
+
+```markdown
+# 真实测试网段联调结果评估
+
+## 背景
+
+- 日期：
+- 分支：
+- 目的：
+- 脱敏说明：
+
+## 执行范围
+
+- 使用配置：
+- 执行阶段：
+- 扫描范围说明：
+
+## 前置验证
+
+- conda 环境：
+- pytest：
+- ruff：
+- mypy：
+
+## Neo4j 连通性结果
+
+- 结果：
+- 发现的问题：
+- 处理结果：
+
+## Neo4j 假数据写入验证
+
+- 输入数据说明：
+- 聚合结果：
+- 幂等验证：
+- 结论：
+
+## 真实测试网段完整扫描结果
+
+- scanned_hosts：
+- reachable_hosts：
+- snmp_successes：
+- ssh_successes：
+- devices：
+- interfaces：
+- links：
+- errors：
+- 总耗时：
+
+## Neo4j 聚合结果
+
+- Device：
+- Interface：
+- NetworkSegment：
+- HAS_INTERFACE：
+- BELONGS_TO_SEGMENT：
+- CONNECTED_TO：
+
+## 设备识别结果
+
+- device_type 分布：
+- deployment_type 分布：
+- endpoint_type 分布：
+- unknown 原因拆解：
+
+## 协议采集结果
+
+- SNMP 成功样本特征：
+- SNMP 失败类型分布：
+- SSH 是否启用：
+- LLDP/CDP 是否启用：
+- 路由表/ARP 表/MAC 表是否启用：
+- 各发现层级启用情况：
+
+## 单 IP 冒烟测试
+
+- 输入：
+- 输出统计：
+- stderr：
+- 结论：
+
+## 已修复的问题
+
+1.
+
+## 需要设计侧评估的问题
+
+1.
+
+## 建议下一步
+
+1.
+```
+
+### 报告验收标准
+
+1. 报告必须包含前置验证结果。
+2. 报告必须包含 Neo4j 连通性和写入幂等结果。
+3. 报告必须包含真实扫描聚合统计。
+4. 报告必须包含 `unknown` 原因拆解。
+5. 报告必须列出需要设计侧评估的问题。
+6. 报告不得包含敏感信息。
+
 ### 阶段 6：多网段和重叠网段测试
 
 目标：验证多网段设计。
