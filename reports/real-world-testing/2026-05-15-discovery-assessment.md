@@ -102,11 +102,22 @@ links               0
 errors            489
 ```
 
+质量指标：
+
+```text
+存活率        24.80%  (126 / 508)
+SNMP 成功率   15.08%  (19 / 126)
+设备识别率   100.00%  (19 / 19，以 SNMP 成功设备为分母)
+unknown 覆盖率 95.88% (489 / 510，包含假数据节点后的图内统计)
+写入覆盖率   100.00%  (508 / 508)
+```
+
 说明：
 
 - SSH 当前关闭，`ssh_successes = 0` 符合预期。
 - 当前阶段尚未实现 LLDP/CDP 链路发现，`links = 0` 符合预期。
 - `errors` 主要来自不可达目标和协议采集失败。
+- 设备识别率使用 `identified_devices / snmp_successes` 作为优先评估口径，不以全部扫描目标为唯一分母。
 
 ## Neo4j 聚合结果
 
@@ -209,6 +220,19 @@ sample_snmp_error   = snmp request failed
 该类设备 ICMP 可达，但 SNMP 未成功返回可识别信息。
 ```
 
+后续代码已将泛化 SNMP 错误拆分为以下脱敏错误类型：
+
+```text
+snmp_timeout
+snmp_auth_failed
+snmp_transport_unreachable
+snmp_oid_unsupported
+snmp_parse_error
+snmp_unknown_error
+```
+
+该报告中的原始采样结果仍保留为当时执行时的 `snmp request failed`，后续重新执行真实联调时应按新错误类型统计。
+
 ## 单 IP 冒烟测试
 
 从真实配置派生单 IP 临时配置：
@@ -249,6 +273,10 @@ stderr           空
 4. 设备识别字段缺失。
    - 已增加 `endpoint_type` 和 `deployment_type`。
    - Neo4j 写入已同步新增字段。
+5. SNMP 失败错误过于泛化。
+   - 已增加 SNMP 失败分类。
+6. 设备识别只依赖 `sysDescr`。
+   - 已增加 `sysObjectID` 受控映射表，当前覆盖 net-snmp。
 
 ## 需要设计侧评估的问题
 
@@ -281,25 +309,26 @@ snmp_successes  = 19
 待评估：
 
 1. 是否需要配置多个 SNMP community 或凭据组。
-2. 是否需要区分 timeout、认证失败、OID 不支持等错误类型。
+2. 是否需要进一步扩展 timeout、认证失败、OID 不支持等错误类型的统计和报告。
 3. 是否需要先做 UDP/161 可达性探测。
 4. 是否需要为不同网段配置不同 SNMP 参数。
 
 ### 3. 设备类型识别数据源优先级
 
-当前主要依据：
+当前已实现依据：
 
 ```text
 SNMP sysDescr
+SNMP sysObjectID 受控映射
 ```
 
 待评估是否增加：
 
-1. `sysObjectID` 厂商和设备类型映射。
-2. SSH `show version` 输出识别。
-3. LLDP/CDP 邻居信息识别。
-4. MAC OUI 识别。
-5. 接口数量和接口描述识别。
+1. SSH `show version` 输出识别。
+2. LLDP/CDP 邻居信息识别。
+3. MAC OUI 识别。
+4. 接口数量和接口描述识别。
+5. 人工标注或配置覆盖策略。
 
 ### 4. deployment_type 识别策略
 
@@ -329,6 +358,6 @@ SNMP sysDescr
 
 1. 设计侧先确认 `unknown/offline/partial` 的图模型策略。
 2. 根据真实测试环境补充 SNMP 参数策略。
-3. 增加 `sysObjectID` 映射表设计。
-4. 决定是否将 SSH `show version` 纳入设备识别。
-5. 决定是否需要 Neo4j 清理脚本或测试 database 隔离。
+3. 决定是否将 SSH `show version` 纳入设备识别。
+4. 决定是否需要 Neo4j 清理脚本或测试 database 隔离。
+5. 下一次真实联调报告中增加 SNMP 失败类型分布。
