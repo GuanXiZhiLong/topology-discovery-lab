@@ -78,6 +78,23 @@ def test_run_discovery_records_ssh_failure_in_summary() -> None:
     assert summary.errors == 2
 
 
+def test_run_discovery_saves_partial_snapshot_when_snmp_fails() -> None:
+    repository = FakeRepository()
+
+    summary = run_discovery(
+        _config(),
+        scan_hosts=_scan_hosts,
+        collect_snmp=_collect_snmp_failure,
+        repository_factory=lambda config: repository,
+    )
+
+    assert summary.snmp_successes == 0
+    assert summary.devices == 2
+    assert summary.errors == 2
+    assert repository.saved_snapshot is not None
+    assert repository.saved_snapshot.devices[0].status == "partial"
+
+
 def test_run_discovery_closes_repository_when_save_fails() -> None:
     repository = FakeRepository(save_error=RuntimeError("write failed"))
 
@@ -179,6 +196,10 @@ def _scan_hosts(config: ScanConfig) -> list[AliveHost]:
 
 def _collect_snmp_success(host: AliveHost, config: SnmpConfig) -> SnmpDeviceInfo:
     return SnmpDeviceInfo(ip=host.ip, success=True, sys_name="example-device")
+
+
+def _collect_snmp_failure(host: AliveHost, config: SnmpConfig) -> SnmpDeviceInfo:
+    return SnmpDeviceInfo(ip=host.ip, success=False, error="snmp_timeout")
 
 
 def _collect_ssh_success(host: AliveHost, config: SshConfig) -> SshDeviceInfo:
