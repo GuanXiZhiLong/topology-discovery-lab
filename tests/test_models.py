@@ -13,6 +13,7 @@ from services.topology_discovery.models import (
     InterfaceNode,
     LinkEdge,
     NetworkSegmentNode,
+    SnmpNeighborInfo,
     SshCommandResult,
     SshDeviceInfo,
     TopologySnapshot,
@@ -200,6 +201,27 @@ def test_ssh_device_info_accepts_command_results() -> None:
 def test_ssh_device_info_rejects_invalid_ip() -> None:
     with pytest.raises(ValidationError):
         SshDeviceInfo(ip="not-an-ip", success=False, error="ssh_request_failed")
+
+
+def test_snmp_neighbor_info_accepts_valid_remote_management_address() -> None:
+    neighbor = SnmpNeighborInfo(
+        protocol="lldp",
+        local_interface_index=1,
+        remote_system_name="example-neighbor",
+        remote_management_address="198.51.100.1",
+    )
+
+    assert neighbor.protocol == "lldp"
+    assert neighbor.remote_management_address == "198.51.100.1"
+
+
+def test_snmp_neighbor_info_rejects_invalid_remote_management_address() -> None:
+    with pytest.raises(ValidationError):
+        SnmpNeighborInfo(
+            protocol="cdp",
+            remote_system_name="example-neighbor",
+            remote_management_address="not-an-ip",
+        )
 
 
 def test_link_edge_rejects_invalid_confidence() -> None:

@@ -512,6 +512,36 @@ snmp:
 
 SNMP 失败时返回包含错误信息的结果，不影响其他设备采集，不在错误中暴露 community。
 
+### LLDP/CDP 邻居采集
+
+当前阶段 SNMP 采集结果可以包含邻居表信息：
+
+```text
+SnmpDeviceInfo.neighbors: list[SnmpNeighborInfo]
+SnmpDeviceInfo.collection_errors: list[str]
+```
+
+`SnmpNeighborInfo` 字段：
+
+- `protocol: str`，当前允许 `lldp`、`cdp`
+- `local_interface_index: int | None`
+- `local_interface_name: str | None`
+- `remote_chassis_id: str | None`
+- `remote_port_id: str | None`
+- `remote_system_name: str | None`
+- `remote_system_description: str | None`
+- `remote_management_address: str | None`
+- `capabilities: str | None`
+
+解析链路时必须保持保守：
+
+1. 远端管理 IP 命中已发现设备时，可以生成链路。
+2. 或远端系统名精确命中已发现设备 hostname 时，可以生成链路。
+3. 不仅凭不完整邻居字段创建新的确认设备节点。
+4. LLDP/CDP 采集失败只记录 `collection_errors`，不影响基础 SNMP 设备和接口结果。
+5. LLDP 生成链路时 `discovery_method = "lldp"`，`confidence = 1.0`。
+6. CDP 生成链路时 `discovery_method = "cdp"`，`confidence = 0.95`。
+
 ## SSH 采集设计
 
 SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。

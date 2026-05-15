@@ -4,6 +4,7 @@ from services.topology_discovery.models import (
     AliveHost,
     SnmpDeviceInfo,
     SnmpInterfaceInfo,
+    SnmpNeighborInfo,
     SshDeviceInfo,
 )
 from services.topology_discovery.parser import build_topology_snapshot
@@ -201,19 +202,137 @@ def test_build_topology_snapshot_derives_scan_targets_from_alive_hosts() -> None
     assert snapshot.scan_targets == ["192.0.2.1", "192.0.2.0/30"]
 
 
+def test_build_topology_snapshot_creates_cdp_link_from_neighbor_management_address() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=1)],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="cdp",
+                        local_interface_index=1,
+                        remote_system_name="example-router",
+                        remote_management_address="198.51.100.1",
+                    )
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2)],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].source_device_id == "device:192.0.2.1"
+    assert snapshot.links[0].target_device_id == "device:198.51.100.1"
+    assert snapshot.links[0].source_interface_id == "interface:device:192.0.2.1:1"
+    assert snapshot.links[0].discovery_method == "cdp"
+    assert snapshot.links[0].confidence == 0.95
+
+
+def test_build_topology_snapshot_creates_lldp_link_from_neighbor_system_name() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=1)],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=1,
+                        remote_system_name="example-router",
+                    )
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2)],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].target_device_id == "device:198.51.100.1"
+    assert snapshot.links[0].discovery_method == "lldp"
+    assert snapshot.links[0].confidence == 1.0
+
+
+def test_build_topology_snapshot_deduplicates_links_preferring_higher_confidence() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=1)],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=1,
+                        remote_system_name="example-router",
+                    ),
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=1,
+                        remote_management_address="198.51.100.1",
+                    ),
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2)],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].confidence == 1.0
+
+
+def test_build_topology_snapshot_ignores_neighbor_without_known_target_device() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        remote_system_name="unknown-neighbor",
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert snapshot.links == []
+
+
 def _snmp_result(
     ip: str = "192.0.2.1",
+    sys_name: str = "example-device",
     sys_descr: str = "Example Switch",
     sys_object_id: str = "1.3.6.1.4.1.999",
     interfaces: list[SnmpInterfaceInfo] | None = None,
+    neighbors: list[SnmpNeighborInfo] | None = None,
 ) -> SnmpDeviceInfo:
     return SnmpDeviceInfo(
         ip=ip,
         success=True,
-        sys_name="example-device",
+        sys_name=sys_name,
         sys_descr=sys_descr,
         sys_object_id=sys_object_id,
         interfaces=interfaces or [_snmp_interface()],
+        neighbors=neighbors or [],
     )
 
 

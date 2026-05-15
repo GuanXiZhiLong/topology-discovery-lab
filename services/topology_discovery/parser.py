@@ -14,9 +14,11 @@ from services.topology_discovery.models import (
     DiscoveryError,
     EndpointType,
     InterfaceNode,
+    LinkEdge,
     NetworkSegmentNode,
     SnmpDeviceInfo,
     SnmpInterfaceInfo,
+    SnmpNeighborInfo,
     SshDeviceInfo,
     TopologySnapshot,
 )
@@ -66,6 +68,9 @@ def build_topology_snapshot(
             for interface in _interfaces_from_snmp_result(snmp_result, started_at)
         ]
     )
+    links = _deduplicate_links(
+        _links_from_snmp_neighbors(snmp_results, devices, interfaces, started_at)
+    )
     errors = (
         _errors_from_alive_hosts(alive_hosts)
         + _errors_from_snmp_results(snmp_results)
@@ -80,7 +85,7 @@ def build_topology_snapshot(
         finished_at=finished_at,
         devices=devices,
         interfaces=interfaces,
-        links=[],
+        links=links,
         network_segments=_network_segments_from_targets(resolved_scan_targets, started_at),
         errors=errors,
     )
@@ -169,7 +174,7 @@ def _errors_from_alive_hosts(alive_hosts: list[AliveHost]) -> list[DiscoveryErro
 
 
 def _errors_from_snmp_results(snmp_results: list[SnmpDeviceInfo]) -> list[DiscoveryError]:
-    return [
+    errors = [
         DiscoveryError(
             target=result.ip,
             stage="snmp",
@@ -179,6 +184,17 @@ def _errors_from_snmp_results(snmp_results: list[SnmpDeviceInfo]) -> list[Discov
         for result in snmp_results
         if not result.success
     ]
+    for result in snmp_results:
+        errors.extend(
+            DiscoveryError(
+                target=result.ip,
+                stage="snmp",
+                message=error,
+                recoverable=True,
+            )
+            for error in result.collection_errors
+        )
+    return errors
 
 
 def _errors_from_ssh_results(ssh_results: list[SshDeviceInfo]) -> list[DiscoveryError]:
@@ -208,6 +224,90 @@ def _deduplicate_interfaces(interfaces: list[InterfaceNode]) -> list[InterfaceNo
     for interface in interfaces:
         by_interface_id.setdefault(interface.interface_id, interface)
     return list(by_interface_id.values())
+
+
+def _deduplicate_links(links: list[LinkEdge]) -> list[LinkEdge]:
+    by_link_id: dict[str, LinkEdge] = {}
+    for link in links:
+        existing = by_link_id.get(link.link_id)
+        if existing is None or link.confidence > existing.confidence:
+            by_link_id[link.link_id] = link
+    return list(by_link_id.values())
+
+
+def _links_from_snmp_neighbors(
+    snmp_results: list[SnmpDeviceInfo],
+    devices: list[DeviceNode],
+    interfaces: list[InterfaceNode],
+    last_seen: datetime,
+) -> list[LinkEdge]:
+    devices_by_ip = {device.ip: device for device in devices}
+    devices_by_hostname = {
+        device.hostname.casefold(): device for device in devices if device.hostname is not None
+    }
+    interfaces_by_device_and_index = {
+        (interface.device_id, interface.if_index): interface
+        for interface in interfaces
+        if interface.if_index is not None
+    }
+
+    links: list[LinkEdge] = []
+    for result in snmp_results:
+        if not result.success:
+            continue
+        source_device = devices_by_ip.get(result.ip)
+        if source_device is None:
+            continue
+        for neighbor in result.neighbors:
+            target_device = _target_device_from_neighbor(
+                neighbor,
+                devices_by_ip,
+                devices_by_hostname,
+            )
+            if target_device is None or target_device.device_id == source_device.device_id:
+                continue
+            source_interface = (
+                interfaces_by_device_and_index.get(
+                    (source_device.device_id, neighbor.local_interface_index)
+                )
+                if neighbor.local_interface_index is not None
+                else None
+            )
+            endpoint_ids = sorted([source_device.device_id, target_device.device_id])
+            links.append(
+                LinkEdge(
+                    link_id=f"link:{endpoint_ids[0]}:{endpoint_ids[1]}:{neighbor.protocol}",
+                    source_device_id=source_device.device_id,
+                    target_device_id=target_device.device_id,
+                    source_interface_id=(
+                        source_interface.interface_id if source_interface is not None else None
+                    ),
+                    discovery_method=neighbor.protocol,
+                    confidence=_neighbor_confidence(neighbor),
+                    last_seen=last_seen,
+                )
+            )
+    return links
+
+
+def _target_device_from_neighbor(
+    neighbor: SnmpNeighborInfo,
+    devices_by_ip: dict[str, DeviceNode],
+    devices_by_hostname: dict[str, DeviceNode],
+) -> DeviceNode | None:
+    if neighbor.remote_management_address is not None:
+        target_device = devices_by_ip.get(neighbor.remote_management_address)
+        if target_device is not None:
+            return target_device
+    if neighbor.remote_system_name is None:
+        return None
+    return devices_by_hostname.get(neighbor.remote_system_name.casefold())
+
+
+def _neighbor_confidence(neighbor: SnmpNeighborInfo) -> float:
+    if neighbor.protocol == "lldp":
+        return 1.0
+    return 0.95
 
 
 def _network_segments_from_targets(
