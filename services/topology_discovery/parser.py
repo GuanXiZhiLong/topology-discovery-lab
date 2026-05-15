@@ -7,9 +7,11 @@ from ipaddress import ip_address, ip_network
 
 from services.topology_discovery.models import (
     AliveHost,
+    DeploymentType,
     DeviceNode,
     DeviceType,
     DiscoveryError,
+    EndpointType,
     InterfaceNode,
     NetworkSegmentNode,
     SnmpDeviceInfo,
@@ -95,6 +97,8 @@ def _devices_from_snmp_results(
                 ip=result.ip,
                 hostname=result.sys_name,
                 device_type=_identify_device_type(result.sys_descr),
+                endpoint_type=_identify_endpoint_type(result.sys_descr),
+                deployment_type=_identify_deployment_type(result.sys_descr),
                 vendor=None,
                 model=None,
                 os_version=None,
@@ -230,6 +234,43 @@ def _identify_device_type(sys_descr: str | None) -> DeviceType:
         return "firewall"
     if "wireless" in normalized or " ap " in f" {normalized} ":
         return "wireless_ap"
+    if "windows server" in normalized or "server" in normalized or "linux" in normalized:
+        return "server"
+    if any(marker in normalized for marker in ("windows", "macos", "android", "ios")):
+        return "endpoint"
+    return "unknown"
+
+
+def _identify_endpoint_type(sys_descr: str | None) -> EndpointType | None:
+    if _identify_device_type(sys_descr) != "endpoint":
+        return None
+    if not sys_descr:
+        return "unknown"
+
+    normalized = sys_descr.casefold()
+    if "android" in normalized or "ios" in normalized:
+        return "phone"
+    if "tablet" in normalized or "ipad" in normalized:
+        return "tablet"
+    if "workstation" in normalized:
+        return "workstation"
+    if "laptop" in normalized or "notebook" in normalized:
+        return "laptop"
+    if "windows" in normalized or "macos" in normalized:
+        return "pc"
+    return "unknown"
+
+
+def _identify_deployment_type(sys_descr: str | None) -> DeploymentType:
+    if not sys_descr:
+        return "unknown"
+
+    normalized = sys_descr.casefold()
+    if any(
+        marker in normalized
+        for marker in ("vmware", "virtual", "kvm", "qemu", "hyper-v", "virtualbox")
+    ):
+        return "virtual"
     return "unknown"
 
 

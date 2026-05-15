@@ -82,6 +82,63 @@ def test_device_node_accepts_partial_status() -> None:
     assert device.status == "partial"
 
 
+def test_device_node_accepts_endpoint_type_for_endpoint() -> None:
+    device = DeviceNode(
+        device_id="device:192.0.2.1",
+        ip="192.0.2.1",
+        device_type="endpoint",
+        endpoint_type="pc",
+        deployment_type="physical",
+        status="online",
+        last_seen=NOW,
+        source="snmp",
+    )
+
+    assert device.endpoint_type == "pc"
+    assert device.deployment_type == "physical"
+
+
+def test_device_node_defaults_endpoint_type_for_endpoint() -> None:
+    device = DeviceNode(
+        device_id="device:192.0.2.1",
+        ip="192.0.2.1",
+        device_type="endpoint",
+        status="online",
+        last_seen=NOW,
+        source="snmp",
+    )
+
+    assert device.endpoint_type == "unknown"
+
+
+def test_device_node_rejects_endpoint_type_for_non_endpoint() -> None:
+    with pytest.raises(ValidationError):
+        DeviceNode(
+            device_id="device:192.0.2.1",
+            ip="192.0.2.1",
+            device_type="switch",
+            endpoint_type="pc",
+            status="online",
+            last_seen=NOW,
+            source="snmp",
+        )
+
+
+def test_device_node_rejects_invalid_deployment_type() -> None:
+    data: dict[str, Any] = {
+        "device_id": "device:192.0.2.1",
+        "ip": "192.0.2.1",
+        "device_type": "unknown",
+        "deployment_type": "cloud",
+        "status": "online",
+        "last_seen": NOW,
+        "source": "snmp",
+    }
+
+    with pytest.raises(ValidationError):
+        DeviceNode(**data)
+
+
 def test_device_node_rejects_missing_required_field() -> None:
     data: dict[str, Any] = {
         "device_id": "device:192.0.2.1",

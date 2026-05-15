@@ -115,6 +115,8 @@ def test_build_topology_snapshot_identifies_device_types() -> None:
         "Example Router": "router",
         "Example Firewall": "firewall",
         "Example Wireless AP": "wireless_ap",
+        "Example Linux Server": "server",
+        "Example Windows 11": "endpoint",
         "Example Appliance": "unknown",
     }
 
@@ -125,6 +127,17 @@ def test_build_topology_snapshot_identifies_device_types() -> None:
         )
 
         assert snapshot.devices[0].device_type == expected_type
+
+
+def test_build_topology_snapshot_identifies_endpoint_and_deployment_types() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[_snmp_result(ip="192.0.2.1", sys_descr="Windows 11 VMware")],
+    )
+
+    assert snapshot.devices[0].device_type == "endpoint"
+    assert snapshot.devices[0].endpoint_type == "pc"
+    assert snapshot.devices[0].deployment_type == "virtual"
 
 
 def test_build_topology_snapshot_uses_timezone_aware_timestamps() -> None:

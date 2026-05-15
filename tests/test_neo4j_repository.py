@@ -39,6 +39,8 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
     device_link_query, device_link_params = driver.session_obj.runs[4]
 
     assert "MERGE (d:Device {device_id: $device_id})" in device_query
+    assert "d.endpoint_type = $endpoint_type" in device_query
+    assert "d.deployment_type = $deployment_type" in device_query
     assert "MERGE (d:Device {device_id: $device_id})" in second_device_query
     assert "MERGE (i:Interface {interface_id: $interface_id})" in interface_query
     assert "MERGE (d)-[:HAS_INTERFACE]->(i)" in interface_query
@@ -49,6 +51,8 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
         device_link_query
     )
     assert device_params["device_id"] == "device:192.0.2.1"
+    assert device_params["endpoint_type"] is None
+    assert device_params["deployment_type"] == "unknown"
     assert interface_params["interface_id"] == "interface:device:192.0.2.1:1"
     assert interface_link_params["source_interface_id"] == "interface:device:192.0.2.1:1"
     assert device_link_params["source_device_id"] == "device:192.0.2.1"
