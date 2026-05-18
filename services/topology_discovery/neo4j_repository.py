@@ -24,7 +24,24 @@ class Neo4jRepositoryError(RuntimeError):
     """Raised when Neo4j operations fail."""
 
 
-class Session(Protocol):
+class QueryRunner(Protocol):
+    """Minimal protocol for objects that can run Cypher queries."""
+
+    def run(self, query: str, parameters: Mapping[str, Any] | None = None) -> Any:
+        """Run a Cypher query."""
+
+
+class Transaction(QueryRunner, Protocol):
+    """Minimal Neo4j transaction protocol used by snapshot writes."""
+
+    def commit(self) -> None:
+        """Commit the transaction."""
+
+    def rollback(self) -> None:
+        """Roll back the transaction."""
+
+
+class Session(QueryRunner, Protocol):
     """Minimal Neo4j session protocol used by the repository."""
 
     def __enter__(self) -> Session:
@@ -33,8 +50,8 @@ class Session(Protocol):
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         """Exit the session context."""
 
-    def run(self, query: str, parameters: Mapping[str, Any] | None = None) -> Any:
-        """Run a Cypher query."""
+    def begin_transaction(self) -> Transaction:
+        """Open an explicit write transaction."""
 
 
 class Driver(Protocol):
@@ -130,23 +147,36 @@ class Neo4jTopologyRepository:
     ) -> None:
         session_kwargs = {"database": database} if database is not None else {}
         with driver.session(**session_kwargs) as session:
-            self._upsert_discovery_run(session, snapshot)
-            for device in snapshot.devices:
-                self._upsert_device(session, device)
-                self._upsert_device_discovery_run_relationship(session, device, snapshot)
+            transaction = session.begin_transaction()
+            try:
+                self._save_snapshot_in_transaction(transaction, snapshot)
+                transaction.commit()
+            except Exception:
+                transaction.rollback()
+                raise
+
+    def _save_snapshot_in_transaction(
+        self,
+        transaction: Transaction,
+        snapshot: TopologySnapshot,
+    ) -> None:
+        self._upsert_discovery_run(transaction, snapshot)
+        for device in snapshot.devices:
+            self._upsert_device(transaction, device)
+            self._upsert_device_discovery_run_relationship(transaction, device, snapshot)
+        for segment in snapshot.network_segments:
+            self._upsert_network_segment(transaction, segment)
+        for device in snapshot.devices:
             for segment in snapshot.network_segments:
-                self._upsert_network_segment(session, segment)
-            for device in snapshot.devices:
-                for segment in snapshot.network_segments:
-                    if _device_belongs_to_segment(device, segment):
-                        self._upsert_device_segment_relationship(session, device, segment)
-            self._mark_missing_segment_devices_offline(session, snapshot)
-            for interface in snapshot.interfaces:
-                self._upsert_interface(session, interface)
-            for link in snapshot.links:
-                self._upsert_link(session, link)
-            self._mark_missing_links_stale(session, snapshot)
-            self._mark_discovery_run_latest(session, snapshot)
+                if _device_belongs_to_segment(device, segment):
+                    self._upsert_device_segment_relationship(transaction, device, segment)
+        self._mark_missing_segment_devices_offline(transaction, snapshot)
+        for interface in snapshot.interfaces:
+            self._upsert_interface(transaction, interface)
+        for link in snapshot.links:
+            self._upsert_link(transaction, link)
+        self._mark_missing_links_stale(transaction, snapshot)
+        self._mark_discovery_run_latest(transaction, snapshot)
 
     def _fetch_latest_topology_counts_with_session(
         self,
@@ -182,7 +212,7 @@ class Neo4jTopologyRepository:
 
     def _mark_discovery_run_latest(
         self,
-        session: Session,
+        session: QueryRunner,
         snapshot: TopologySnapshot,
     ) -> None:
         session.run(
@@ -197,7 +227,7 @@ class Neo4jTopologyRepository:
             {"snapshot_id": snapshot.snapshot_id},
         )
 
-    def _upsert_discovery_run(self, session: Session, snapshot: TopologySnapshot) -> None:
+    def _upsert_discovery_run(self, session: QueryRunner, snapshot: TopologySnapshot) -> None:
         session.run(
             """
             MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})
@@ -212,7 +242,7 @@ class Neo4jTopologyRepository:
             _discovery_run_parameters(snapshot),
         )
 
-    def _upsert_device(self, session: Session, device: DeviceNode) -> None:
+    def _upsert_device(self, session: QueryRunner, device: DeviceNode) -> None:
         session.run(
             """
             MERGE (d:Device {device_id: $device_id})
@@ -235,7 +265,7 @@ class Neo4jTopologyRepository:
 
     def _upsert_device_discovery_run_relationship(
         self,
-        session: Session,
+        session: QueryRunner,
         device: DeviceNode,
         snapshot: TopologySnapshot,
     ) -> None:
@@ -251,7 +281,7 @@ class Neo4jTopologyRepository:
             },
         )
 
-    def _upsert_interface(self, session: Session, interface: InterfaceNode) -> None:
+    def _upsert_interface(self, session: QueryRunner, interface: InterfaceNode) -> None:
         session.run(
             """
             MERGE (i:Interface {interface_id: $interface_id})
@@ -271,7 +301,11 @@ class Neo4jTopologyRepository:
             _interface_parameters(interface),
         )
 
-    def _upsert_network_segment(self, session: Session, segment: NetworkSegmentNode) -> None:
+    def _upsert_network_segment(
+        self,
+        session: QueryRunner,
+        segment: NetworkSegmentNode,
+    ) -> None:
         session.run(
             """
             MERGE (s:NetworkSegment {segment_id: $segment_id})
@@ -285,7 +319,7 @@ class Neo4jTopologyRepository:
 
     def _upsert_device_segment_relationship(
         self,
-        session: Session,
+        session: QueryRunner,
         device: DeviceNode,
         segment: NetworkSegmentNode,
     ) -> None:
@@ -303,7 +337,7 @@ class Neo4jTopologyRepository:
 
     def _mark_missing_segment_devices_offline(
         self,
-        session: Session,
+        session: QueryRunner,
         snapshot: TopologySnapshot,
     ) -> None:
         segment_ids = [segment.segment_id for segment in snapshot.network_segments]
@@ -322,7 +356,7 @@ class Neo4jTopologyRepository:
             },
         )
 
-    def _upsert_link(self, session: Session, link: LinkEdge) -> None:
+    def _upsert_link(self, session: QueryRunner, link: LinkEdge) -> None:
         if link.source_interface_id and link.target_interface_id:
             session.run(
                 """
@@ -351,7 +385,11 @@ class Neo4jTopologyRepository:
             _normalized_link_parameters(link),
         )
 
-    def _mark_missing_links_stale(self, session: Session, snapshot: TopologySnapshot) -> None:
+    def _mark_missing_links_stale(
+        self,
+        session: QueryRunner,
+        snapshot: TopologySnapshot,
+    ) -> None:
         link_ids = [link.link_id for link in snapshot.links]
         segment_ids = [segment.segment_id for segment in snapshot.network_segments]
         if not link_ids or not segment_ids:
