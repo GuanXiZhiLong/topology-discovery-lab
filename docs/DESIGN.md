@@ -689,6 +689,15 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 2. 再实现 LLDP/CDP。
 3. 再考虑路由表、ARP 表、MAC 表推断。
 
+当前实现边界：
+
+1. ARP 表和 MAC 地址表可以从 SSH 只读命令输出中解析。
+2. 仅当 ARP/MAC 记录能匹配到当前快照中已发现设备或接口时生成链路。
+3. 不因 ARP/MAC 表记录创建新的确认设备节点。
+4. ARP 表推断链路使用 `discovery_method = "arp_table"`，`confidence = 0.6`。
+5. MAC 地址表推断链路使用 `discovery_method = "mac_table"`，`confidence = 0.7`。
+6. 当同一链路已有 LLDP/CDP 高置信结果时，低置信 ARP/MAC 推断不得覆盖。
+
 ## Neo4j 图模型
 
 节点标签：
