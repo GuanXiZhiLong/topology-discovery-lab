@@ -732,7 +732,7 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 
 写入必须使用 `MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})` 保证幂等。
 
-保存新的发现运行时，应将其他 `DiscoveryRun.is_latest` 设置为 `false`，并将当前运行设置为 `true`，用于查询最近一次拓扑状态。
+保存新的发现运行时，应在设备、关系、网段、接口和链路全部写入成功后，最后将其他 `DiscoveryRun.is_latest` 设置为 `false`，并将当前运行设置为 `true`，用于查询最近一次拓扑状态。保存中途失败时，不应提前清理旧的 latest，也不应把不完整快照标记为 latest。
 
 ### `DISCOVERED_IN` 关系
 
