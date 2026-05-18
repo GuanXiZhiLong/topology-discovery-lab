@@ -822,6 +822,18 @@ SET d.ip = $ip,
 (:Device)-[:CONNECTED_TO]->(:Device)
 ```
 
+`CONNECTED_TO` 关系属性：
+
+| 属性 | 说明 |
+| --- | --- |
+| `link_id` | 稳定链路 ID |
+| `discovery_method` | 链路发现方式 |
+| `confidence` | 链路置信度 |
+| `last_seen` | 最近一次发现时间 |
+| `status` | 链路状态，当前允许 `active`、`stale` |
+
+本次快照发现到的链路应写入 `status = "active"`。当本次快照包含链路结果时，不在当前 `link_id` 集合中的历史 `CONNECTED_TO` 关系可以标记为 `status = "stale"`。如果本次快照没有任何链路结果，不应批量将历史链路标记为 stale。
+
 ## 核心接口
 
 ```python

@@ -31,7 +31,7 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
 
     repository.save_snapshot(snapshot)
 
-    assert len(driver.session_obj.runs) == 9
+    assert len(driver.session_obj.runs) == 10
     run_query, run_params = driver.session_obj.runs[0]
     device_query, device_params = driver.session_obj.runs[1]
     first_run_link_query, first_run_link_params = driver.session_obj.runs[2]
@@ -39,7 +39,8 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
     interface_query, interface_params = driver.session_obj.runs[5]
     interface_link_query, interface_link_params = driver.session_obj.runs[6]
     device_link_query, device_link_params = driver.session_obj.runs[7]
-    latest_query, latest_params = driver.session_obj.runs[8]
+    stale_query, stale_params = driver.session_obj.runs[8]
+    latest_query, latest_params = driver.session_obj.runs[9]
 
     assert "MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})" in run_query
     assert "is_latest" not in run_query
@@ -55,9 +56,13 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
     assert "MERGE (source)-[r:CONNECTED_TO {link_id: $link_id}]->(target)" in (
         interface_link_query
     )
+    assert "r.status = 'active'" in interface_link_query
     assert "MERGE (source)-[r:CONNECTED_TO {link_id: $link_id}]->(target)" in (
         device_link_query
     )
+    assert "r.status = 'active'" in device_link_query
+    assert "SET r.status = 'stale'" in stale_query
+    assert stale_params["link_ids"] == ["link:interface-a:interface-b", "link:device-a:device-b"]
     assert "MATCH (current:DiscoveryRun {snapshot_id: $snapshot_id})" in latest_query
     assert "current.is_latest = true" in latest_query
     assert "other.is_latest = false" in latest_query
@@ -184,6 +189,7 @@ def test_save_snapshot_does_not_mark_missing_devices_offline_without_segments() 
 
     queries = [query for query, _ in driver.session_obj.runs]
     assert all("SET d.status = 'offline'" not in query for query in queries)
+    assert all("SET r.status = 'stale'" not in query for query in queries)
 
 
 def test_save_snapshot_writes_discovery_run_and_device_memberships() -> None:
@@ -279,6 +285,7 @@ def test_save_snapshot_normalizes_reversed_device_link_endpoints() -> None:
     params = driver.session_obj.runs[1][1]
     assert params["source_device_id"] == "device:192.0.2.1"
     assert params["target_device_id"] == "device:198.51.100.1"
+    assert "r.status = 'active'" in driver.session_obj.runs[1][0]
 
 
 def test_save_snapshot_normalizes_reversed_interface_link_endpoints() -> None:
@@ -308,6 +315,44 @@ def test_save_snapshot_normalizes_reversed_interface_link_endpoints() -> None:
     assert params["target_interface_id"] == "interface:device:198.51.100.1:1"
     assert params["source_device_id"] == "device:192.0.2.1"
     assert params["target_device_id"] == "device:198.51.100.1"
+    assert "r.status = 'active'" in driver.session_obj.runs[1][0]
+
+
+def test_save_snapshot_marks_missing_links_stale_when_links_are_present() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        started_at=NOW,
+        links=[
+            LinkEdge(
+                link_id="link:device-a:device-b",
+                source_device_id="device:192.0.2.1",
+                target_device_id="device:198.51.100.1",
+                discovery_method="ip_subnet",
+                confidence=0.3,
+                last_seen=NOW,
+            )
+        ],
+    )
+
+    repository.save_snapshot(snapshot)
+
+    stale_query, stale_params = driver.session_obj.runs[2]
+    assert "MATCH ()-[r:CONNECTED_TO]->()" in stale_query
+    assert "WHERE NOT r.link_id IN $link_ids" in stale_query
+    assert "SET r.status = 'stale'" in stale_query
+    assert stale_params == {"link_ids": ["link:device-a:device-b"]}
+
+
+def test_save_snapshot_does_not_mark_all_links_stale_when_snapshot_has_no_links() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+
+    repository.save_snapshot(TopologySnapshot(snapshot_id="snapshot-1", started_at=NOW))
+
+    queries = [query for query, _ in driver.session_obj.runs]
+    assert all("SET r.status = 'stale'" not in query for query in queries)
 
 
 def test_connect_failure_is_sanitized() -> None:

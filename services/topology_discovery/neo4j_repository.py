@@ -124,6 +124,7 @@ class Neo4jTopologyRepository:
                 self._upsert_interface(session, interface)
             for link in snapshot.links:
                 self._upsert_link(session, link)
+            self._mark_missing_links_stale(session, snapshot)
             self._mark_discovery_run_latest(session, snapshot)
 
     def _require_driver(self) -> Driver:
@@ -284,7 +285,8 @@ class Neo4jTopologyRepository:
                 MERGE (source)-[r:CONNECTED_TO {link_id: $link_id}]->(target)
                 SET r.discovery_method = $discovery_method,
                 r.confidence = $confidence,
-                r.last_seen = $last_seen
+                r.last_seen = $last_seen,
+                r.status = 'active'
                 """,
                 _normalized_link_parameters(link),
             )
@@ -297,9 +299,23 @@ class Neo4jTopologyRepository:
             MERGE (source)-[r:CONNECTED_TO {link_id: $link_id}]->(target)
             SET r.discovery_method = $discovery_method,
                 r.confidence = $confidence,
-                r.last_seen = $last_seen
+                r.last_seen = $last_seen,
+                r.status = 'active'
             """,
             _normalized_link_parameters(link),
+        )
+
+    def _mark_missing_links_stale(self, session: Session, snapshot: TopologySnapshot) -> None:
+        link_ids = [link.link_id for link in snapshot.links]
+        if not link_ids:
+            return
+        session.run(
+            """
+            MATCH ()-[r:CONNECTED_TO]->()
+            WHERE NOT r.link_id IN $link_ids
+            SET r.status = 'stale'
+            """,
+            {"link_ids": link_ids},
         )
 
 
