@@ -153,6 +153,35 @@ def test_save_snapshot_writes_network_segments_and_memberships() -> None:
     )
     assert sum("MERGE (d)-[:BELONGS_TO_SEGMENT]->(s)" in query for query in queries) == 2
     assert driver.session_obj.runs[4][1]["segment_id"] == "segment:192.0.2.1"
+    assert "SET d.status = 'offline'" in driver.session_obj.runs[8][0]
+    assert driver.session_obj.runs[8][1] == {
+        "snapshot_id": "snapshot-1",
+        "segment_ids": ["segment:192.0.2.1", "segment:192.0.2.0/30"],
+    }
+
+
+def test_save_snapshot_does_not_mark_missing_devices_offline_without_segments() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        started_at=NOW,
+        devices=[
+            DeviceNode(
+                device_id="device:192.0.2.1",
+                ip="192.0.2.1",
+                device_type="unknown",
+                status="partial",
+                last_seen=NOW,
+                source="icmp",
+            )
+        ],
+    )
+
+    repository.save_snapshot(snapshot)
+
+    queries = [query for query, _ in driver.session_obj.runs]
+    assert all("SET d.status = 'offline'" not in query for query in queries)
 
 
 def test_save_snapshot_writes_discovery_run_and_device_memberships() -> None:

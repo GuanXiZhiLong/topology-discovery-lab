@@ -120,6 +120,7 @@ class Neo4jTopologyRepository:
                 for segment in snapshot.network_segments:
                     if _device_belongs_to_segment(device, segment):
                         self._upsert_device_segment_relationship(session, device, segment)
+            self._mark_missing_segment_devices_offline(session, snapshot)
             for interface in snapshot.interfaces:
                 self._upsert_interface(session, interface)
             for link in snapshot.links:
@@ -248,6 +249,27 @@ class Neo4jTopologyRepository:
             {
                 "device_id": device.device_id,
                 "segment_id": segment.segment_id,
+            },
+        )
+
+    def _mark_missing_segment_devices_offline(
+        self,
+        session: Session,
+        snapshot: TopologySnapshot,
+    ) -> None:
+        segment_ids = [segment.segment_id for segment in snapshot.network_segments]
+        if not segment_ids:
+            return
+        session.run(
+            """
+            MATCH (d:Device)-[:BELONGS_TO_SEGMENT]->(s:NetworkSegment)
+            WHERE s.segment_id IN $segment_ids
+              AND NOT (d)-[:DISCOVERED_IN]->(:DiscoveryRun {snapshot_id: $snapshot_id})
+            SET d.status = 'offline'
+            """,
+            {
+                "snapshot_id": snapshot.snapshot_id,
+                "segment_ids": segment_ids,
             },
         )
 
