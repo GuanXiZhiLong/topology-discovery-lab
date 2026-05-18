@@ -31,16 +31,24 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
 
     repository.save_snapshot(snapshot)
 
-    assert len(driver.session_obj.runs) == 5
-    device_query, device_params = driver.session_obj.runs[0]
-    second_device_query, _ = driver.session_obj.runs[1]
-    interface_query, interface_params = driver.session_obj.runs[2]
-    interface_link_query, interface_link_params = driver.session_obj.runs[3]
-    device_link_query, device_link_params = driver.session_obj.runs[4]
+    assert len(driver.session_obj.runs) == 9
+    run_query, run_params = driver.session_obj.runs[0]
+    device_query, device_params = driver.session_obj.runs[1]
+    first_run_link_query, first_run_link_params = driver.session_obj.runs[2]
+    second_device_query, _ = driver.session_obj.runs[3]
+    interface_query, interface_params = driver.session_obj.runs[5]
+    interface_link_query, interface_link_params = driver.session_obj.runs[6]
+    device_link_query, device_link_params = driver.session_obj.runs[7]
+    latest_query, latest_params = driver.session_obj.runs[8]
 
+    assert "MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})" in run_query
+    assert "is_latest" not in run_query
+    assert run_params["snapshot_id"] == "snapshot-1"
+    assert run_params["device_count"] == 2
     assert "MERGE (d:Device {device_id: $device_id})" in device_query
     assert "d.endpoint_type = $endpoint_type" in device_query
     assert "d.deployment_type = $deployment_type" in device_query
+    assert "MERGE (d)-[:DISCOVERED_IN]->(r)" in first_run_link_query
     assert "MERGE (d:Device {device_id: $device_id})" in second_device_query
     assert "MERGE (i:Interface {interface_id: $interface_id})" in interface_query
     assert "MERGE (d)-[:HAS_INTERFACE]->(i)" in interface_query
@@ -50,7 +58,13 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
     assert "MERGE (source)-[r:CONNECTED_TO {link_id: $link_id}]->(target)" in (
         device_link_query
     )
+    assert "MATCH (current:DiscoveryRun {snapshot_id: $snapshot_id})" in latest_query
+    assert "current.is_latest = true" in latest_query
+    assert "other.is_latest = false" in latest_query
+    assert latest_params["snapshot_id"] == "snapshot-1"
     assert device_params["device_id"] == "device:192.0.2.1"
+    assert first_run_link_params["device_id"] == "device:192.0.2.1"
+    assert first_run_link_params["snapshot_id"] == "snapshot-1"
     assert device_params["endpoint_type"] is None
     assert device_params["deployment_type"] == "unknown"
     assert interface_params["interface_id"] == "interface:device:192.0.2.1:1"
@@ -140,7 +154,106 @@ def test_save_snapshot_writes_network_segments_and_memberships() -> None:
         == 2
     )
     assert sum("MERGE (d)-[:BELONGS_TO_SEGMENT]->(s)" in query for query in queries) == 2
-    assert driver.session_obj.runs[1][1]["segment_id"] == "segment:192.0.2.1"
+    assert driver.session_obj.runs[3][1]["segment_id"] == "segment:192.0.2.1"
+    assert "SET d.status = 'offline'" in driver.session_obj.runs[7][0]
+    assert driver.session_obj.runs[7][1] == {
+        "snapshot_id": "snapshot-1",
+        "segment_ids": ["segment:192.0.2.1", "segment:192.0.2.0/30"],
+    }
+
+
+def test_save_snapshot_does_not_mark_missing_devices_offline_without_segments() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        started_at=NOW,
+        devices=[
+            DeviceNode(
+                device_id="device:192.0.2.1",
+                ip="192.0.2.1",
+                device_type="unknown",
+                status="partial",
+                last_seen=NOW,
+                source="icmp",
+            )
+        ],
+    )
+
+    repository.save_snapshot(snapshot)
+
+    queries = [query for query, _ in driver.session_obj.runs]
+    assert all("SET d.status = 'offline'" not in query for query in queries)
+
+
+def test_save_snapshot_writes_discovery_run_and_device_memberships() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        scan_targets=["192.0.2.0/30"],
+        started_at=NOW,
+        finished_at=NOW,
+        devices=[
+            DeviceNode(
+                device_id="device:192.0.2.1",
+                ip="192.0.2.1",
+                device_type="unknown",
+                status="partial",
+                last_seen=NOW,
+                source="icmp",
+            )
+        ],
+        errors=[],
+    )
+
+    repository.save_snapshot(snapshot)
+
+    run_query, run_params = driver.session_obj.runs[0]
+    relation_query, relation_params = driver.session_obj.runs[2]
+    latest_query, latest_params = driver.session_obj.runs[3]
+    assert "MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})" in run_query
+    assert "is_latest" not in run_query
+    assert run_params["scan_targets"] == ["192.0.2.0/30"]
+    assert run_params["started_at"] == NOW.isoformat()
+    assert run_params["finished_at"] == NOW.isoformat()
+    assert run_params["device_count"] == 1
+    assert run_params["interface_count"] == 0
+    assert run_params["link_count"] == 0
+    assert run_params["error_count"] == 0
+    assert "MERGE (d)-[:DISCOVERED_IN]->(r)" in relation_query
+    assert relation_params == {
+        "device_id": "device:192.0.2.1",
+        "snapshot_id": "snapshot-1",
+    }
+    assert "current.is_latest = true" in latest_query
+    assert latest_params == {"snapshot_id": "snapshot-1"}
+
+
+def test_save_snapshot_does_not_switch_latest_before_later_write_failure() -> None:
+    driver = FailingOnDeviceUpsertDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        started_at=NOW,
+        devices=[
+            DeviceNode(
+                device_id="device:192.0.2.1",
+                ip="192.0.2.1",
+                device_type="unknown",
+                status="partial",
+                last_seen=NOW,
+                source="icmp",
+            )
+        ],
+    )
+
+    with pytest.raises(Neo4jRepositoryError):
+        repository.save_snapshot(snapshot)
+
+    queries = [query for query, _ in driver.session_obj.runs]
+    assert any("MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})" in query for query in queries)
+    assert all("is_latest" not in query for query in queries)
 
 
 def test_save_snapshot_normalizes_reversed_device_link_endpoints() -> None:
@@ -163,7 +276,7 @@ def test_save_snapshot_normalizes_reversed_device_link_endpoints() -> None:
 
     repository.save_snapshot(snapshot)
 
-    params = driver.session_obj.runs[0][1]
+    params = driver.session_obj.runs[1][1]
     assert params["source_device_id"] == "device:192.0.2.1"
     assert params["target_device_id"] == "device:198.51.100.1"
 
@@ -190,7 +303,7 @@ def test_save_snapshot_normalizes_reversed_interface_link_endpoints() -> None:
 
     repository.save_snapshot(snapshot)
 
-    params = driver.session_obj.runs[0][1]
+    params = driver.session_obj.runs[1][1]
     assert params["source_interface_id"] == "interface:device:192.0.2.1:1"
     assert params["target_interface_id"] == "interface:device:198.51.100.1:1"
     assert params["source_device_id"] == "device:192.0.2.1"
@@ -318,6 +431,19 @@ class FakeDriver:
 class FailingDriver(FakeDriver):
     def verify_connectivity(self) -> None:
         raise RuntimeError("authentication failed for dummy-password")
+
+
+class FailingOnDeviceUpsertDriver(FakeDriver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.session_obj = FailingOnDeviceUpsertSession()
+
+
+class FailingOnDeviceUpsertSession(FakeSession):
+    def run(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
+        if "MERGE (d:Device {device_id: $device_id})" in query:
+            raise RuntimeError("device upsert failed")
+        return super().run(query, parameters)
 
 
 class DatabaseSelectionUnsupportedDriver(FakeDriver):

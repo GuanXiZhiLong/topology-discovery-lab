@@ -109,18 +109,22 @@ class Neo4jTopologyRepository:
     ) -> None:
         session_kwargs = {"database": database} if database is not None else {}
         with driver.session(**session_kwargs) as session:
+            self._upsert_discovery_run(session, snapshot)
             for device in snapshot.devices:
                 self._upsert_device(session, device)
+                self._upsert_device_discovery_run_relationship(session, device, snapshot)
             for segment in snapshot.network_segments:
                 self._upsert_network_segment(session, segment)
             for device in snapshot.devices:
                 for segment in snapshot.network_segments:
                     if _device_belongs_to_segment(device, segment):
                         self._upsert_device_segment_relationship(session, device, segment)
+            self._mark_missing_segment_devices_offline(session, snapshot)
             for interface in snapshot.interfaces:
                 self._upsert_interface(session, interface)
             for link in snapshot.links:
                 self._upsert_link(session, link)
+            self._mark_discovery_run_latest(session, snapshot)
 
     def _require_driver(self) -> Driver:
         if self._driver is None:
@@ -128,6 +132,38 @@ class Neo4jTopologyRepository:
         if self._driver is None:
             raise Neo4jRepositoryError("failed to initialize Neo4j driver")
         return self._driver
+
+    def _mark_discovery_run_latest(
+        self,
+        session: Session,
+        snapshot: TopologySnapshot,
+    ) -> None:
+        session.run(
+            """
+            MATCH (current:DiscoveryRun {snapshot_id: $snapshot_id})
+            SET current.is_latest = true
+            WITH current
+            MATCH (other:DiscoveryRun)
+            WHERE other.snapshot_id <> $snapshot_id
+            SET other.is_latest = false
+            """,
+            {"snapshot_id": snapshot.snapshot_id},
+        )
+
+    def _upsert_discovery_run(self, session: Session, snapshot: TopologySnapshot) -> None:
+        session.run(
+            """
+            MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})
+            SET r.scan_targets = $scan_targets,
+                r.started_at = $started_at,
+                r.finished_at = $finished_at,
+                r.device_count = $device_count,
+                r.interface_count = $interface_count,
+                r.link_count = $link_count,
+                r.error_count = $error_count
+            """,
+            _discovery_run_parameters(snapshot),
+        )
 
     def _upsert_device(self, session: Session, device: DeviceNode) -> None:
         session.run(
@@ -148,6 +184,24 @@ class Neo4jTopologyRepository:
                 d.source = $source
             """,
             _device_parameters(device),
+        )
+
+    def _upsert_device_discovery_run_relationship(
+        self,
+        session: Session,
+        device: DeviceNode,
+        snapshot: TopologySnapshot,
+    ) -> None:
+        session.run(
+            """
+            MATCH (d:Device {device_id: $device_id})
+            MATCH (r:DiscoveryRun {snapshot_id: $snapshot_id})
+            MERGE (d)-[:DISCOVERED_IN]->(r)
+            """,
+            {
+                "device_id": device.device_id,
+                "snapshot_id": snapshot.snapshot_id,
+            },
         )
 
     def _upsert_interface(self, session: Session, interface: InterfaceNode) -> None:
@@ -200,6 +254,27 @@ class Neo4jTopologyRepository:
             },
         )
 
+    def _mark_missing_segment_devices_offline(
+        self,
+        session: Session,
+        snapshot: TopologySnapshot,
+    ) -> None:
+        segment_ids = [segment.segment_id for segment in snapshot.network_segments]
+        if not segment_ids:
+            return
+        session.run(
+            """
+            MATCH (d:Device)-[:BELONGS_TO_SEGMENT]->(s:NetworkSegment)
+            WHERE s.segment_id IN $segment_ids
+              AND NOT (d)-[:DISCOVERED_IN]->(:DiscoveryRun {snapshot_id: $snapshot_id})
+            SET d.status = 'offline'
+            """,
+            {
+                "snapshot_id": snapshot.snapshot_id,
+                "segment_ids": segment_ids,
+            },
+        )
+
     def _upsert_link(self, session: Session, link: LinkEdge) -> None:
         if link.source_interface_id and link.target_interface_id:
             session.run(
@@ -248,6 +323,21 @@ def _device_parameters(device: DeviceNode) -> dict[str, Any]:
         "sys_object_id": device.sys_object_id,
         "last_seen": _to_neo4j_datetime(device.last_seen),
         "source": device.source,
+    }
+
+
+def _discovery_run_parameters(snapshot: TopologySnapshot) -> dict[str, Any]:
+    return {
+        "snapshot_id": snapshot.snapshot_id,
+        "scan_targets": snapshot.scan_targets,
+        "started_at": _to_neo4j_datetime(snapshot.started_at),
+        "finished_at": (
+            _to_neo4j_datetime(snapshot.finished_at) if snapshot.finished_at is not None else None
+        ),
+        "device_count": len(snapshot.devices),
+        "interface_count": len(snapshot.interfaces),
+        "link_count": len(snapshot.links),
+        "error_count": len(snapshot.errors),
     }
 
 

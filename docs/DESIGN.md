@@ -716,6 +716,40 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 - `DISCOVERED_IN`
 - `BELONGS_TO_SEGMENT`
 
+### `DiscoveryRun` 节点属性
+
+| 属性 | 说明 |
+| --- | --- |
+| `snapshot_id` | 一次拓扑发现结果的唯一 ID |
+| `scan_targets` | 本次扫描使用的原始目标列表 |
+| `started_at` | 本次扫描开始时间 |
+| `finished_at` | 本次扫描结束时间，可以为空 |
+| `device_count` | 本次快照中的设备数量 |
+| `interface_count` | 本次快照中的接口数量 |
+| `link_count` | 本次快照中的链路数量 |
+| `error_count` | 本次快照中的错误数量 |
+| `is_latest` | 是否为当前最新一次发现运行 |
+
+写入必须使用 `MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})` 保证幂等。
+
+保存新的发现运行时，应在设备、关系、网段、接口和链路全部写入成功后，最后将其他 `DiscoveryRun.is_latest` 设置为 `false`，并将当前运行设置为 `true`，用于查询最近一次拓扑状态。保存中途失败时，不应提前清理旧的 latest，也不应把不完整快照标记为 latest。
+
+### `DISCOVERED_IN` 关系
+
+结构：
+
+```cypher
+(:Device)-[:DISCOVERED_IN]->(:DiscoveryRun)
+```
+
+含义：
+
+1. 记录设备在哪次发现运行中出现。
+2. 重复保存同一个 `snapshot_id` 不应重复创建关系。
+3. 后续增量更新可以基于最近一次 `DiscoveryRun` 判断设备、接口或链路是否 stale。
+4. 保存快照后，可以将本次扫描涉及的 `NetworkSegment` 下、但未关联当前 `DiscoveryRun` 的既有设备标记为 `status = "offline"`。
+5. 离线标记必须限制在本次扫描涉及的网段范围内，不能影响未参与本次扫描的历史设备。
+
 ### `NetworkSegment` 节点属性
 
 | 属性 | 说明 |
