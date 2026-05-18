@@ -541,6 +541,8 @@ SnmpDeviceInfo.collection_errors: list[str]
 4. LLDP/CDP 采集失败只记录 `collection_errors`，不影响基础 SNMP 设备和接口结果。
 5. LLDP 生成链路时 `discovery_method = "lldp"`，`confidence = 1.0`。
 6. CDP 生成链路时 `discovery_method = "cdp"`，`confidence = 0.95`。
+7. 当本端接口索引和远端端口名都能匹配已发现接口时，应生成接口级链路。
+8. 链路 ID 优先基于排序后的接口 ID；接口不足时回退到排序后的设备 ID，避免 A 到 B 和 B 到 A 重复写入。
 
 ## SSH 采集设计
 

@@ -250,6 +250,10 @@ def _links_from_snmp_neighbors(
         for interface in interfaces
         if interface.if_index is not None
     }
+    interfaces_by_device_and_name = {
+        (interface.device_id, _normalize_interface_name(interface.name)): interface
+        for interface in interfaces
+    }
 
     links: list[LinkEdge] = []
     for result in snmp_results:
@@ -273,14 +277,26 @@ def _links_from_snmp_neighbors(
                 if neighbor.local_interface_index is not None
                 else None
             )
-            endpoint_ids = sorted([source_device.device_id, target_device.device_id])
+            target_interface = _target_interface_from_neighbor(
+                target_device,
+                neighbor,
+                interfaces_by_device_and_name,
+            )
             links.append(
                 LinkEdge(
-                    link_id=f"link:{endpoint_ids[0]}:{endpoint_ids[1]}:{neighbor.protocol}",
+                    link_id=_link_id(
+                        source_device,
+                        target_device,
+                        source_interface,
+                        target_interface,
+                    ),
                     source_device_id=source_device.device_id,
                     target_device_id=target_device.device_id,
                     source_interface_id=(
                         source_interface.interface_id if source_interface is not None else None
+                    ),
+                    target_interface_id=(
+                        target_interface.interface_id if target_interface is not None else None
                     ),
                     discovery_method=neighbor.protocol,
                     confidence=_neighbor_confidence(neighbor),
@@ -302,6 +318,35 @@ def _target_device_from_neighbor(
     if neighbor.remote_system_name is None:
         return None
     return devices_by_hostname.get(neighbor.remote_system_name.casefold())
+
+
+def _target_interface_from_neighbor(
+    target_device: DeviceNode,
+    neighbor: SnmpNeighborInfo,
+    interfaces_by_device_and_name: dict[tuple[str, str], InterfaceNode],
+) -> InterfaceNode | None:
+    if neighbor.remote_port_id is None:
+        return None
+    return interfaces_by_device_and_name.get(
+        (target_device.device_id, _normalize_interface_name(neighbor.remote_port_id))
+    )
+
+
+def _link_id(
+    source_device: DeviceNode,
+    target_device: DeviceNode,
+    source_interface: InterfaceNode | None,
+    target_interface: InterfaceNode | None,
+) -> str:
+    if source_interface is not None and target_interface is not None:
+        endpoints = sorted([source_interface.interface_id, target_interface.interface_id])
+        return f"link:{endpoints[0]}:{endpoints[1]}"
+    endpoints = sorted([source_device.device_id, target_device.device_id])
+    return f"link:{endpoints[0]}:{endpoints[1]}"
+
+
+def _normalize_interface_name(value: str) -> str:
+    return " ".join(value.casefold().strip().split())
 
 
 def _neighbor_confidence(neighbor: SnmpNeighborInfo) -> float:

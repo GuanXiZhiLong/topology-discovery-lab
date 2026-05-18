@@ -213,6 +213,7 @@ def test_build_topology_snapshot_creates_cdp_link_from_neighbor_management_addre
                     SnmpNeighborInfo(
                         protocol="cdp",
                         local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
                         remote_system_name="example-router",
                         remote_management_address="198.51.100.1",
                     )
@@ -222,7 +223,7 @@ def test_build_topology_snapshot_creates_cdp_link_from_neighbor_management_addre
                 ip="198.51.100.1",
                 sys_name="example-router",
                 sys_descr="Example Router",
-                interfaces=[_snmp_interface(if_index=2)],
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
             ),
         ],
     )
@@ -231,6 +232,7 @@ def test_build_topology_snapshot_creates_cdp_link_from_neighbor_management_addre
     assert snapshot.links[0].source_device_id == "device:192.0.2.1"
     assert snapshot.links[0].target_device_id == "device:198.51.100.1"
     assert snapshot.links[0].source_interface_id == "interface:device:192.0.2.1:1"
+    assert snapshot.links[0].target_interface_id == "interface:device:198.51.100.1:2"
     assert snapshot.links[0].discovery_method == "cdp"
     assert snapshot.links[0].confidence == 0.95
 
@@ -246,6 +248,7 @@ def test_build_topology_snapshot_creates_lldp_link_from_neighbor_system_name() -
                     SnmpNeighborInfo(
                         protocol="lldp",
                         local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
                         remote_system_name="example-router",
                     )
                 ],
@@ -254,18 +257,20 @@ def test_build_topology_snapshot_creates_lldp_link_from_neighbor_system_name() -
                 ip="198.51.100.1",
                 sys_name="example-router",
                 sys_descr="Example Router",
-                interfaces=[_snmp_interface(if_index=2)],
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
             ),
         ],
     )
 
     assert len(snapshot.links) == 1
     assert snapshot.links[0].target_device_id == "device:198.51.100.1"
+    assert snapshot.links[0].source_interface_id == "interface:device:192.0.2.1:1"
+    assert snapshot.links[0].target_interface_id == "interface:device:198.51.100.1:2"
     assert snapshot.links[0].discovery_method == "lldp"
     assert snapshot.links[0].confidence == 1.0
 
 
-def test_build_topology_snapshot_deduplicates_links_preferring_higher_confidence() -> None:
+def test_build_topology_snapshot_deduplicates_neighbor_links_preferring_higher_confidence() -> None:
     snapshot = build_topology_snapshot(
         alive_hosts=[],
         snmp_results=[
@@ -276,11 +281,13 @@ def test_build_topology_snapshot_deduplicates_links_preferring_higher_confidence
                     SnmpNeighborInfo(
                         protocol="lldp",
                         local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
                         remote_system_name="example-router",
                     ),
                     SnmpNeighborInfo(
-                        protocol="lldp",
+                        protocol="cdp",
                         local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
                         remote_management_address="198.51.100.1",
                     ),
                 ],
@@ -289,13 +296,58 @@ def test_build_topology_snapshot_deduplicates_links_preferring_higher_confidence
                 ip="198.51.100.1",
                 sys_name="example-router",
                 sys_descr="Example Router",
-                interfaces=[_snmp_interface(if_index=2)],
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
             ),
         ],
     )
 
     assert len(snapshot.links) == 1
     assert snapshot.links[0].confidence == 1.0
+
+
+def test_build_topology_snapshot_deduplicates_reciprocal_lldp_links() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                sys_name="example-switch",
+                interfaces=[_snmp_interface(if_index=1, name="GigabitEthernet0/1")],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
+                        remote_system_name="example-router",
+                    )
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=2,
+                        remote_port_id="GigabitEthernet0/1",
+                        remote_system_name="example-switch",
+                    )
+                ],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].source_interface_id in {
+        "interface:device:192.0.2.1:1",
+        "interface:device:198.51.100.1:2",
+    }
+    assert snapshot.links[0].target_interface_id in {
+        "interface:device:192.0.2.1:1",
+        "interface:device:198.51.100.1:2",
+    }
 
 
 def test_build_topology_snapshot_ignores_neighbor_without_known_target_device() -> None:
