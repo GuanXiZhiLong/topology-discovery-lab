@@ -728,8 +728,11 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 | `interface_count` | 本次快照中的接口数量 |
 | `link_count` | 本次快照中的链路数量 |
 | `error_count` | 本次快照中的错误数量 |
+| `is_latest` | 是否为当前最新一次发现运行 |
 
 写入必须使用 `MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})` 保证幂等。
+
+保存新的发现运行时，应将其他 `DiscoveryRun.is_latest` 设置为 `false`，并将当前运行设置为 `true`，用于查询最近一次拓扑状态。
 
 ### `DISCOVERED_IN` 关系
 

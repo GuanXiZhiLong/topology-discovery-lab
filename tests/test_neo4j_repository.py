@@ -31,16 +31,20 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
 
     repository.save_snapshot(snapshot)
 
-    assert len(driver.session_obj.runs) == 8
-    run_query, run_params = driver.session_obj.runs[0]
-    device_query, device_params = driver.session_obj.runs[1]
-    first_run_link_query, first_run_link_params = driver.session_obj.runs[2]
-    second_device_query, _ = driver.session_obj.runs[3]
-    interface_query, interface_params = driver.session_obj.runs[5]
-    interface_link_query, interface_link_params = driver.session_obj.runs[6]
-    device_link_query, device_link_params = driver.session_obj.runs[7]
+    assert len(driver.session_obj.runs) == 9
+    mark_runs_query, mark_runs_params = driver.session_obj.runs[0]
+    run_query, run_params = driver.session_obj.runs[1]
+    device_query, device_params = driver.session_obj.runs[2]
+    first_run_link_query, first_run_link_params = driver.session_obj.runs[3]
+    second_device_query, _ = driver.session_obj.runs[4]
+    interface_query, interface_params = driver.session_obj.runs[6]
+    interface_link_query, interface_link_params = driver.session_obj.runs[7]
+    device_link_query, device_link_params = driver.session_obj.runs[8]
 
+    assert "MATCH (r:DiscoveryRun)" in mark_runs_query
+    assert mark_runs_params["snapshot_id"] == "snapshot-1"
     assert "MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})" in run_query
+    assert "r.is_latest = true" in run_query
     assert run_params["snapshot_id"] == "snapshot-1"
     assert run_params["device_count"] == 2
     assert "MERGE (d:Device {device_id: $device_id})" in device_query
@@ -148,7 +152,7 @@ def test_save_snapshot_writes_network_segments_and_memberships() -> None:
         == 2
     )
     assert sum("MERGE (d)-[:BELONGS_TO_SEGMENT]->(s)" in query for query in queries) == 2
-    assert driver.session_obj.runs[3][1]["segment_id"] == "segment:192.0.2.1"
+    assert driver.session_obj.runs[4][1]["segment_id"] == "segment:192.0.2.1"
 
 
 def test_save_snapshot_writes_discovery_run_and_device_memberships() -> None:
@@ -174,9 +178,13 @@ def test_save_snapshot_writes_discovery_run_and_device_memberships() -> None:
 
     repository.save_snapshot(snapshot)
 
-    run_query, run_params = driver.session_obj.runs[0]
-    relation_query, relation_params = driver.session_obj.runs[2]
+    mark_runs_query, mark_runs_params = driver.session_obj.runs[0]
+    run_query, run_params = driver.session_obj.runs[1]
+    relation_query, relation_params = driver.session_obj.runs[3]
+    assert "SET r.is_latest = false" in mark_runs_query
+    assert mark_runs_params == {"snapshot_id": "snapshot-1"}
     assert "MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})" in run_query
+    assert "r.is_latest = true" in run_query
     assert run_params["scan_targets"] == ["192.0.2.0/30"]
     assert run_params["started_at"] == NOW.isoformat()
     assert run_params["finished_at"] == NOW.isoformat()
@@ -211,7 +219,7 @@ def test_save_snapshot_normalizes_reversed_device_link_endpoints() -> None:
 
     repository.save_snapshot(snapshot)
 
-    params = driver.session_obj.runs[1][1]
+    params = driver.session_obj.runs[2][1]
     assert params["source_device_id"] == "device:192.0.2.1"
     assert params["target_device_id"] == "device:198.51.100.1"
 
@@ -238,7 +246,7 @@ def test_save_snapshot_normalizes_reversed_interface_link_endpoints() -> None:
 
     repository.save_snapshot(snapshot)
 
-    params = driver.session_obj.runs[1][1]
+    params = driver.session_obj.runs[2][1]
     assert params["source_interface_id"] == "interface:device:192.0.2.1:1"
     assert params["target_interface_id"] == "interface:device:198.51.100.1:1"
     assert params["source_device_id"] == "device:192.0.2.1"

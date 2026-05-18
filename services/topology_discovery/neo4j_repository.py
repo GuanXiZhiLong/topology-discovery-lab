@@ -109,6 +109,7 @@ class Neo4jTopologyRepository:
     ) -> None:
         session_kwargs = {"database": database} if database is not None else {}
         with driver.session(**session_kwargs) as session:
+            self._mark_existing_discovery_runs_not_latest(session, snapshot)
             self._upsert_discovery_run(session, snapshot)
             for device in snapshot.devices:
                 self._upsert_device(session, device)
@@ -131,6 +132,20 @@ class Neo4jTopologyRepository:
             raise Neo4jRepositoryError("failed to initialize Neo4j driver")
         return self._driver
 
+    def _mark_existing_discovery_runs_not_latest(
+        self,
+        session: Session,
+        snapshot: TopologySnapshot,
+    ) -> None:
+        session.run(
+            """
+            MATCH (r:DiscoveryRun)
+            WHERE r.snapshot_id <> $snapshot_id
+            SET r.is_latest = false
+            """,
+            {"snapshot_id": snapshot.snapshot_id},
+        )
+
     def _upsert_discovery_run(self, session: Session, snapshot: TopologySnapshot) -> None:
         session.run(
             """
@@ -141,7 +156,8 @@ class Neo4jTopologyRepository:
                 r.device_count = $device_count,
                 r.interface_count = $interface_count,
                 r.link_count = $link_count,
-                r.error_count = $error_count
+                r.error_count = $error_count,
+                r.is_latest = true
             """,
             _discovery_run_parameters(snapshot),
         )
