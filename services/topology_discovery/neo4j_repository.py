@@ -101,6 +101,27 @@ class Neo4jTopologyRepository:
         except Exception as exc:  # noqa: BLE001
             raise Neo4jRepositoryError("failed to save topology snapshot") from exc
 
+    def fetch_latest_topology_counts(self) -> dict[str, int]:
+        """Return aggregate counts for the latest discovery run."""
+
+        driver = self._require_driver()
+        try:
+            return self._fetch_latest_topology_counts_with_session(
+                driver,
+                database=self._config.database,
+            )
+        except ConfigurationError as exc:
+            if not _is_database_selection_unsupported(exc):
+                raise Neo4jRepositoryError("failed to fetch latest topology counts") from exc
+            try:
+                return self._fetch_latest_topology_counts_with_session(driver, database=None)
+            except Exception as fallback_exc:  # noqa: BLE001
+                raise Neo4jRepositoryError(
+                    "failed to fetch latest topology counts"
+                ) from fallback_exc
+        except Exception as exc:  # noqa: BLE001
+            raise Neo4jRepositoryError("failed to fetch latest topology counts") from exc
+
     def _save_snapshot_with_session(
         self,
         driver: Driver,
@@ -126,6 +147,31 @@ class Neo4jTopologyRepository:
                 self._upsert_link(session, link)
             self._mark_missing_links_stale(session, snapshot)
             self._mark_discovery_run_latest(session, snapshot)
+
+    def _fetch_latest_topology_counts_with_session(
+        self,
+        driver: Driver,
+        database: str | None,
+    ) -> dict[str, int]:
+        session_kwargs = {"database": database} if database is not None else {}
+        with driver.session(**session_kwargs) as session:
+            result = session.run(
+                """
+                MATCH (r:DiscoveryRun {is_latest: true})
+                RETURN r.device_count AS devices,
+                       r.interface_count AS interfaces,
+                       r.link_count AS active_links
+                """
+            )
+            records = list(result)
+        if not records:
+            return {"devices": 0, "interfaces": 0, "active_links": 0}
+        record = records[0]
+        return {
+            "devices": int(record["devices"]),
+            "interfaces": int(record["interfaces"]),
+            "active_links": int(record["active_links"]),
+        }
 
     def _require_driver(self) -> Driver:
         if self._driver is None:

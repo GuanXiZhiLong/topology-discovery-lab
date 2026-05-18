@@ -379,6 +379,43 @@ def test_close_closes_driver() -> None:
     assert driver.closed is True
 
 
+def test_fetch_latest_topology_counts_returns_latest_run_counts() -> None:
+    driver = LatestCountsDriver(
+        [
+            {
+                "devices": 2,
+                "interfaces": 3,
+                "active_links": 1,
+            }
+        ]
+    )
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+
+    counts = repository.fetch_latest_topology_counts()
+
+    query, params = driver.session_obj.runs[0]
+    assert "MATCH (r:DiscoveryRun {is_latest: true})" in query
+    assert params == {}
+    assert counts == {
+        "devices": 2,
+        "interfaces": 3,
+        "active_links": 1,
+    }
+
+
+def test_fetch_latest_topology_counts_returns_zeroes_without_latest_run() -> None:
+    driver = LatestCountsDriver([])
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+
+    counts = repository.fetch_latest_topology_counts()
+
+    assert counts == {
+        "devices": 0,
+        "interfaces": 0,
+        "active_links": 0,
+    }
+
+
 def _config(password: str = "dummy-password", database: str = "neo4j") -> Neo4jConfig:
     return Neo4jConfig(
         uri="bolt://localhost:7687",
@@ -489,6 +526,22 @@ class FailingOnDeviceUpsertSession(FakeSession):
         if "MERGE (d:Device {device_id: $device_id})" in query:
             raise RuntimeError("device upsert failed")
         return super().run(query, parameters)
+
+
+class LatestCountsDriver(FakeDriver):
+    def __init__(self, records: list[dict[str, int]]) -> None:
+        super().__init__()
+        self.session_obj = LatestCountsSession(records)
+
+
+class LatestCountsSession(FakeSession):
+    def __init__(self, records: list[dict[str, int]]) -> None:
+        super().__init__()
+        self.records = records
+
+    def run(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
+        self.runs.append((query, parameters or {}))
+        return self.records
 
 
 class DatabaseSelectionUnsupportedDriver(FakeDriver):

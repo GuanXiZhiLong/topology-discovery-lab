@@ -834,6 +834,8 @@ SET d.ip = $ip,
 
 本次快照发现到的链路应写入 `status = "active"`。当本次快照包含链路结果时，不在当前 `link_id` 集合中的历史 `CONNECTED_TO` 关系可以标记为 `status = "stale"`。如果本次快照没有任何链路结果，不应批量将历史链路标记为 stale。
 
+Repository 可以提供查询最新拓扑聚合状态的最小接口，基于 `DiscoveryRun {is_latest: true}` 返回设备、接口和 active 链路数量。该查询不应读取配置文件或执行扫描。
+
 ## 核心接口
 
 ```python
