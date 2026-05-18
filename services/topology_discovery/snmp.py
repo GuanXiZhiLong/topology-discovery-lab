@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from ipaddress import ip_address
 from typing import Any
 
 from pysnmp.hlapi.asyncio import (
@@ -18,7 +19,12 @@ from pysnmp.hlapi.asyncio import (
 )
 
 from services.topology_discovery.config import SnmpConfig
-from services.topology_discovery.models import AliveHost, SnmpDeviceInfo, SnmpInterfaceInfo
+from services.topology_discovery.models import (
+    AliveHost,
+    SnmpDeviceInfo,
+    SnmpInterfaceInfo,
+    SnmpNeighborInfo,
+)
 
 SYS_DESCR_OID = "1.3.6.1.2.1.1.1.0"
 SYS_OBJECT_ID_OID = "1.3.6.1.2.1.1.2.0"
@@ -29,6 +35,16 @@ IF_SPEED_OID = "1.3.6.1.2.1.2.2.1.5"
 IF_PHYS_ADDRESS_OID = "1.3.6.1.2.1.2.2.1.6"
 IF_ADMIN_STATUS_OID = "1.3.6.1.2.1.2.2.1.7"
 IF_OPER_STATUS_OID = "1.3.6.1.2.1.2.2.1.8"
+LLDP_REM_CHASSIS_ID_OID = "1.0.8802.1.1.2.1.4.1.1.5"
+LLDP_REM_PORT_ID_OID = "1.0.8802.1.1.2.1.4.1.1.7"
+LLDP_REM_SYS_NAME_OID = "1.0.8802.1.1.2.1.4.1.1.9"
+LLDP_REM_SYS_DESC_OID = "1.0.8802.1.1.2.1.4.1.1.10"
+LLDP_REM_SYS_CAP_ENABLED_OID = "1.0.8802.1.1.2.1.4.1.1.12"
+CDP_CACHE_ADDRESS_OID = "1.3.6.1.4.1.9.9.23.1.2.1.1.4"
+CDP_CACHE_DEVICE_ID_OID = "1.3.6.1.4.1.9.9.23.1.2.1.1.6"
+CDP_CACHE_DEVICE_PORT_OID = "1.3.6.1.4.1.9.9.23.1.2.1.1.7"
+CDP_CACHE_PLATFORM_OID = "1.3.6.1.4.1.9.9.23.1.2.1.1.8"
+CDP_CACHE_CAPABILITIES_OID = "1.3.6.1.4.1.9.9.23.1.2.1.1.9"
 
 SnmpGet = Callable[[str, SnmpConfig, str], str | None]
 SnmpWalk = Callable[[str, SnmpConfig, str], dict[str, str]]
@@ -59,6 +75,7 @@ def collect_snmp_device_info(
         sys_object_id = get_func(host.ip, config, SYS_OBJECT_ID_OID)
         sys_name = get_func(host.ip, config, SYS_NAME_OID)
         interfaces = _collect_interfaces(host.ip, config, walk_func)
+        neighbors, collection_errors = _collect_neighbors(host.ip, config, walk_func)
     except SnmpError as exc:
         return _failed_result(host.ip, _sanitize_error(exc))
     except TimeoutError:
@@ -73,6 +90,8 @@ def collect_snmp_device_info(
         sys_descr=sys_descr,
         sys_object_id=sys_object_id,
         interfaces=interfaces,
+        neighbors=neighbors,
+        collection_errors=collection_errors,
     )
 
 
@@ -123,6 +142,89 @@ def _collect_interfaces(
             )
         )
     return interfaces
+
+
+def _collect_neighbors(
+    ip: str,
+    config: SnmpConfig,
+    walk_func: SnmpWalk,
+) -> tuple[list[SnmpNeighborInfo], list[str]]:
+    neighbors: list[SnmpNeighborInfo] = []
+    errors: list[str] = []
+
+    for collect_func, error_name in (
+        (_collect_lldp_neighbors, "lldp_collection_failed"),
+        (_collect_cdp_neighbors, "cdp_collection_failed"),
+    ):
+        try:
+            neighbors.extend(collect_func(ip, config, walk_func))
+        except (SnmpError, TimeoutError, OSError, ValueError):
+            errors.append(error_name)
+
+    return neighbors, errors
+
+
+def _collect_lldp_neighbors(
+    ip: str,
+    config: SnmpConfig,
+    walk_func: SnmpWalk,
+) -> list[SnmpNeighborInfo]:
+    chassis_ids = walk_func(ip, config, LLDP_REM_CHASSIS_ID_OID)
+    port_ids = walk_func(ip, config, LLDP_REM_PORT_ID_OID)
+    system_names = walk_func(ip, config, LLDP_REM_SYS_NAME_OID)
+    system_descriptions = walk_func(ip, config, LLDP_REM_SYS_DESC_OID)
+    capabilities = walk_func(ip, config, LLDP_REM_SYS_CAP_ENABLED_OID)
+
+    neighbors: list[SnmpNeighborInfo] = []
+    for oid, remote_name in sorted(system_names.items()):
+        suffix = _table_suffix(oid, LLDP_REM_SYS_NAME_OID)
+        if suffix is None:
+            continue
+        neighbors.append(
+            SnmpNeighborInfo(
+                protocol="lldp",
+                remote_chassis_id=chassis_ids.get(f"{LLDP_REM_CHASSIS_ID_OID}.{suffix}"),
+                remote_port_id=port_ids.get(f"{LLDP_REM_PORT_ID_OID}.{suffix}"),
+                remote_system_name=remote_name,
+                remote_system_description=system_descriptions.get(
+                    f"{LLDP_REM_SYS_DESC_OID}.{suffix}"
+                ),
+                capabilities=capabilities.get(f"{LLDP_REM_SYS_CAP_ENABLED_OID}.{suffix}"),
+            )
+        )
+    return neighbors
+
+
+def _collect_cdp_neighbors(
+    ip: str,
+    config: SnmpConfig,
+    walk_func: SnmpWalk,
+) -> list[SnmpNeighborInfo]:
+    addresses = walk_func(ip, config, CDP_CACHE_ADDRESS_OID)
+    device_ids = walk_func(ip, config, CDP_CACHE_DEVICE_ID_OID)
+    ports = walk_func(ip, config, CDP_CACHE_DEVICE_PORT_OID)
+    platforms = walk_func(ip, config, CDP_CACHE_PLATFORM_OID)
+    capabilities = walk_func(ip, config, CDP_CACHE_CAPABILITIES_OID)
+
+    neighbors: list[SnmpNeighborInfo] = []
+    for oid, remote_name in sorted(device_ids.items()):
+        suffix = _table_suffix(oid, CDP_CACHE_DEVICE_ID_OID)
+        if suffix is None:
+            continue
+        neighbors.append(
+            SnmpNeighborInfo(
+                protocol="cdp",
+                local_interface_index=_cdp_local_interface_from_suffix(suffix),
+                remote_port_id=ports.get(f"{CDP_CACHE_DEVICE_PORT_OID}.{suffix}"),
+                remote_system_name=remote_name,
+                remote_system_description=platforms.get(f"{CDP_CACHE_PLATFORM_OID}.{suffix}"),
+                remote_management_address=_normalize_ip_address(
+                    addresses.get(f"{CDP_CACHE_ADDRESS_OID}.{suffix}")
+                ),
+                capabilities=capabilities.get(f"{CDP_CACHE_CAPABILITIES_OID}.{suffix}"),
+            )
+        )
+    return neighbors
 
 
 async def _snmp_get_async(ip: str, config: SnmpConfig, oid: str) -> str | None:
@@ -211,6 +313,30 @@ def _oid_suffix(oid: str) -> int | None:
 
 def _sortable_oid_suffix(oid: str) -> int:
     return _oid_suffix(oid) or 0
+
+
+def _table_suffix(oid: str, base_oid: str) -> str | None:
+    prefix = f"{base_oid}."
+    if not oid.startswith(prefix):
+        return None
+    suffix = oid.removeprefix(prefix)
+    return suffix or None
+
+
+def _cdp_local_interface_from_suffix(suffix: str) -> int | None:
+    parts = suffix.split(".")
+    if not parts:
+        return None
+    return _parse_int(parts[0])
+
+
+def _normalize_ip_address(value: str | None) -> str | None:
+    if value is None:
+        return None
+    try:
+        return str(ip_address(value))
+    except ValueError:
+        return None
 
 
 def _parse_int(value: str | None) -> int | None:

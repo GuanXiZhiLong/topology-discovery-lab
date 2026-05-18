@@ -4,6 +4,8 @@ from services.topology_discovery.models import (
     AliveHost,
     SnmpDeviceInfo,
     SnmpInterfaceInfo,
+    SnmpNeighborInfo,
+    SshCommandResult,
     SshDeviceInfo,
 )
 from services.topology_discovery.parser import build_topology_snapshot
@@ -201,30 +203,406 @@ def test_build_topology_snapshot_derives_scan_targets_from_alive_hosts() -> None
     assert snapshot.scan_targets == ["192.0.2.1", "192.0.2.0/30"]
 
 
+def test_build_topology_snapshot_creates_cdp_link_from_neighbor_management_address() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=1)],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="cdp",
+                        local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
+                        remote_system_name="example-router",
+                        remote_management_address="198.51.100.1",
+                    )
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].source_device_id == "device:192.0.2.1"
+    assert snapshot.links[0].target_device_id == "device:198.51.100.1"
+    assert snapshot.links[0].source_interface_id == "interface:device:192.0.2.1:1"
+    assert snapshot.links[0].target_interface_id == "interface:device:198.51.100.1:2"
+    assert snapshot.links[0].discovery_method == "cdp"
+    assert snapshot.links[0].confidence == 0.95
+
+
+def test_build_topology_snapshot_creates_lldp_link_from_neighbor_system_name() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=1)],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
+                        remote_system_name="example-router",
+                    )
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].target_device_id == "device:198.51.100.1"
+    assert snapshot.links[0].source_interface_id == "interface:device:192.0.2.1:1"
+    assert snapshot.links[0].target_interface_id == "interface:device:198.51.100.1:2"
+    assert snapshot.links[0].discovery_method == "lldp"
+    assert snapshot.links[0].confidence == 1.0
+
+
+def test_build_topology_snapshot_does_not_treat_lldp_local_port_as_if_index() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=100, name="GigabitEthernet0/1")],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=None,
+                        remote_port_id="GigabitEthernet0/2",
+                        remote_system_name="example-router",
+                    )
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].source_interface_id is None
+    assert snapshot.links[0].target_interface_id == "interface:device:198.51.100.1:2"
+
+
+def test_build_topology_snapshot_deduplicates_neighbor_links_preferring_higher_confidence() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=1)],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
+                        remote_system_name="example-router",
+                    ),
+                    SnmpNeighborInfo(
+                        protocol="cdp",
+                        local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
+                        remote_management_address="198.51.100.1",
+                    ),
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].confidence == 1.0
+
+
+def test_build_topology_snapshot_deduplicates_reciprocal_lldp_links() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                sys_name="example-switch",
+                interfaces=[_snmp_interface(if_index=1, name="GigabitEthernet0/1")],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
+                        remote_system_name="example-router",
+                    )
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=2,
+                        remote_port_id="GigabitEthernet0/1",
+                        remote_system_name="example-switch",
+                    )
+                ],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].source_interface_id in {
+        "interface:device:192.0.2.1:1",
+        "interface:device:198.51.100.1:2",
+    }
+    assert snapshot.links[0].target_interface_id in {
+        "interface:device:192.0.2.1:1",
+        "interface:device:198.51.100.1:2",
+    }
+
+
+def test_build_topology_snapshot_ignores_neighbor_without_known_target_device() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        remote_system_name="unknown-neighbor",
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert snapshot.links == []
+
+
+def test_build_topology_snapshot_creates_arp_table_link_to_known_device() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(ip="192.0.2.1"),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_descr="Example Router",
+                interfaces=[
+                    _snmp_interface(
+                        if_index=2,
+                        name="GigabitEthernet0/2",
+                        mac_address="00:11:22:33:44:55",
+                    )
+                ],
+            ),
+        ],
+        ssh_results=[
+            SshDeviceInfo(
+                ip="192.0.2.1",
+                success=True,
+                commands=[
+                    SshCommandResult(
+                        name="show_ip_arp",
+                        command="show ip arp",
+                        success=True,
+                        output=(
+                            "Protocol Address Age (min) Hardware Addr Type Interface\n"
+                            "Internet 198.51.100.1 0 0011.2233.4455 ARPA Vlan1"
+                        ),
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].target_device_id == "device:198.51.100.1"
+    assert snapshot.links[0].target_interface_id == "interface:device:198.51.100.1:2"
+    assert snapshot.links[0].discovery_method == "arp_table"
+    assert snapshot.links[0].confidence == 0.6
+
+
+def test_build_topology_snapshot_ignores_arp_entry_when_ip_does_not_match_mac_device() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(ip="192.0.2.1"),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_descr="Example Router",
+                interfaces=[
+                    _snmp_interface(
+                        if_index=2,
+                        name="GigabitEthernet0/2",
+                        mac_address="00:11:22:33:44:55",
+                    )
+                ],
+            ),
+        ],
+        ssh_results=[
+            SshDeviceInfo(
+                ip="192.0.2.1",
+                success=True,
+                commands=[
+                    SshCommandResult(
+                        name="show_ip_arp",
+                        command="show ip arp",
+                        success=True,
+                        output=(
+                            "Protocol Address Age (min) Hardware Addr Type Interface\n"
+                            "Internet 203.0.113.1 0 0011.2233.4455 ARPA Vlan1"
+                        ),
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert snapshot.links == []
+
+
+def test_build_topology_snapshot_creates_mac_table_interface_link_to_known_device() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=1, name="GigabitEthernet0/1")],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_descr="Example Router",
+                interfaces=[
+                    _snmp_interface(
+                        if_index=2,
+                        name="GigabitEthernet0/2",
+                        mac_address="00:11:22:33:44:55",
+                    )
+                ],
+            ),
+        ],
+        ssh_results=[
+            SshDeviceInfo(
+                ip="192.0.2.1",
+                success=True,
+                commands=[
+                    SshCommandResult(
+                        name="show_mac_address_table",
+                        command="show mac address-table",
+                        success=True,
+                        output="10 0011.2233.4455 DYNAMIC GigabitEthernet0/1",
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].source_interface_id == "interface:device:192.0.2.1:1"
+    assert snapshot.links[0].target_interface_id == "interface:device:198.51.100.1:2"
+    assert snapshot.links[0].discovery_method == "mac_table"
+    assert snapshot.links[0].confidence == 0.7
+
+
+def test_build_topology_snapshot_keeps_lldp_over_mac_table_inference() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=1, name="GigabitEthernet0/1")],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=1,
+                        remote_port_id="GigabitEthernet0/2",
+                        remote_system_name="example-router",
+                    )
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[
+                    _snmp_interface(
+                        if_index=2,
+                        name="GigabitEthernet0/2",
+                        mac_address="00:11:22:33:44:55",
+                    )
+                ],
+            ),
+        ],
+        ssh_results=[
+            SshDeviceInfo(
+                ip="192.0.2.1",
+                success=True,
+                commands=[
+                    SshCommandResult(
+                        name="show_mac_address_table",
+                        command="show mac address-table",
+                        success=True,
+                        output="10 0011.2233.4455 DYNAMIC GigabitEthernet0/1",
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].discovery_method == "lldp"
+    assert snapshot.links[0].confidence == 1.0
+
+
 def _snmp_result(
     ip: str = "192.0.2.1",
+    sys_name: str = "example-device",
     sys_descr: str = "Example Switch",
     sys_object_id: str = "1.3.6.1.4.1.999",
     interfaces: list[SnmpInterfaceInfo] | None = None,
+    neighbors: list[SnmpNeighborInfo] | None = None,
 ) -> SnmpDeviceInfo:
     return SnmpDeviceInfo(
         ip=ip,
         success=True,
-        sys_name="example-device",
+        sys_name=sys_name,
         sys_descr=sys_descr,
         sys_object_id=sys_object_id,
         interfaces=interfaces or [_snmp_interface()],
+        neighbors=neighbors or [],
     )
 
 
 def _snmp_interface(
     if_index: int = 1,
     name: str = "GigabitEthernet0/1",
+    mac_address: str = "00:11:22:33:44:55",
 ) -> SnmpInterfaceInfo:
     return SnmpInterfaceInfo(
         if_index=if_index,
         name=name,
-        mac_address="00:11:22:33:44:55",
+        mac_address=mac_address,
         admin_status="up",
         oper_status="up",
         speed_bps=1_000_000_000,

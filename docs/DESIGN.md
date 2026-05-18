@@ -512,6 +512,39 @@ snmp:
 
 SNMP 失败时返回包含错误信息的结果，不影响其他设备采集，不在错误中暴露 community。
 
+### LLDP/CDP 邻居采集
+
+当前阶段 SNMP 采集结果可以包含邻居表信息：
+
+```text
+SnmpDeviceInfo.neighbors: list[SnmpNeighborInfo]
+SnmpDeviceInfo.collection_errors: list[str]
+```
+
+`SnmpNeighborInfo` 字段：
+
+- `protocol: str`，当前允许 `lldp`、`cdp`
+- `local_interface_index: int | None`
+- `local_interface_name: str | None`
+- `remote_chassis_id: str | None`
+- `remote_port_id: str | None`
+- `remote_system_name: str | None`
+- `remote_system_description: str | None`
+- `remote_management_address: str | None`
+- `capabilities: str | None`
+
+解析链路时必须保持保守：
+
+1. 远端管理 IP 命中已发现设备时，可以生成链路。
+2. 或远端系统名精确命中已发现设备 hostname 时，可以生成链路。
+3. 不仅凭不完整邻居字段创建新的确认设备节点。
+4. LLDP/CDP 采集失败只记录 `collection_errors`，不影响基础 SNMP 设备和接口结果。
+5. LLDP 生成链路时 `discovery_method = "lldp"`，`confidence = 1.0`。
+6. CDP 生成链路时 `discovery_method = "cdp"`，`confidence = 0.95`。
+7. 当本端接口索引和远端端口名都能匹配已发现接口时，应生成接口级链路。
+8. 链路 ID 优先基于排序后的接口 ID；接口不足时回退到排序后的设备 ID，避免 A 到 B 和 B 到 A 重复写入。
+9. LLDP remote table 的 `localPortNum` 不等同于 IF-MIB `ifIndex`，不能直接用作本端接口索引；无法可靠映射时只能生成设备级或单侧接口链路。
+
 ## SSH 采集设计
 
 SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
@@ -656,6 +689,16 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 1. 先实现基础发现和 SNMP 采集。
 2. 再实现 LLDP/CDP。
 3. 再考虑路由表、ARP 表、MAC 表推断。
+
+当前实现边界：
+
+1. ARP 表和 MAC 地址表可以从 SSH 只读命令输出中解析。
+2. 仅当 ARP/MAC 记录能匹配到当前快照中已发现设备或接口时生成链路。
+3. 不因 ARP/MAC 表记录创建新的确认设备节点。
+4. ARP 表推断链路使用 `discovery_method = "arp_table"`，`confidence = 0.6`。
+5. MAC 地址表推断链路使用 `discovery_method = "mac_table"`，`confidence = 0.7`。
+6. 当同一链路已有 LLDP/CDP 高置信结果时，低置信 ARP/MAC 推断不得覆盖。
+7. ARP 表推断必须同时满足 ARP IP 命中已发现目标设备，且 ARP MAC 匹配该目标设备接口；只命中 MAC 但 IP 不一致时不得写入确认链路。
 
 ## Neo4j 图模型
 

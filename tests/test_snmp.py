@@ -3,12 +3,18 @@ from __future__ import annotations
 from services.topology_discovery.config import SnmpConfig
 from services.topology_discovery.models import AliveHost
 from services.topology_discovery.snmp import (
+    CDP_CACHE_ADDRESS_OID,
+    CDP_CACHE_DEVICE_ID_OID,
+    CDP_CACHE_DEVICE_PORT_OID,
     IF_ADMIN_STATUS_OID,
     IF_DESCR_OID,
     IF_INDEX_OID,
     IF_OPER_STATUS_OID,
     IF_PHYS_ADDRESS_OID,
     IF_SPEED_OID,
+    LLDP_REM_CHASSIS_ID_OID,
+    LLDP_REM_PORT_ID_OID,
+    LLDP_REM_SYS_NAME_OID,
     SYS_DESCR_OID,
     SYS_NAME_OID,
     SYS_OBJECT_ID_OID,
@@ -34,6 +40,35 @@ def test_collect_snmp_device_info_success() -> None:
     assert result.interfaces[0].name == "GigabitEthernet0/1"
     assert result.interfaces[0].admin_status == "up"
     assert result.interfaces[0].oper_status == "down"
+
+
+def test_collect_snmp_device_info_collects_lldp_and_cdp_neighbors() -> None:
+    result = collect_snmp_device_info(
+        _host(),
+        _config(),
+        snmp_get_func=_mock_get,
+        snmp_walk_func=_mock_walk_with_neighbors,
+    )
+
+    assert result.success is True
+    assert [neighbor.protocol for neighbor in result.neighbors] == ["lldp", "cdp"]
+    assert result.neighbors[0].local_interface_index is None
+    assert result.neighbors[0].remote_system_name == "example-neighbor"
+    assert result.neighbors[1].remote_management_address == "198.51.100.1"
+
+
+def test_collect_snmp_device_info_keeps_base_data_when_neighbor_collection_fails() -> None:
+    result = collect_snmp_device_info(
+        _host(),
+        _config(),
+        snmp_get_func=_mock_get,
+        snmp_walk_func=_neighbor_failure_walk,
+    )
+
+    assert result.success is True
+    assert len(result.interfaces) == 1
+    assert result.neighbors == []
+    assert result.collection_errors == ["lldp_collection_failed", "cdp_collection_failed"]
 
 
 def test_collect_snmp_device_info_disabled_returns_failed_result() -> None:
@@ -198,3 +233,30 @@ def _mock_walk(ip: str, config: SnmpConfig, oid: str) -> dict[str, str]:
         IF_OPER_STATUS_OID: {f"{IF_OPER_STATUS_OID}.1": "2"},
     }
     return values_by_oid.get(oid, {})
+
+
+def _mock_walk_with_neighbors(ip: str, config: SnmpConfig, oid: str) -> dict[str, str]:
+    values = _mock_walk(ip, config, oid)
+    if values:
+        return values
+
+    lldp_suffix = "0.1.1"
+    cdp_suffix = "1.1"
+    values_by_oid = {
+        LLDP_REM_CHASSIS_ID_OID: {f"{LLDP_REM_CHASSIS_ID_OID}.{lldp_suffix}": "chassis-1"},
+        LLDP_REM_PORT_ID_OID: {f"{LLDP_REM_PORT_ID_OID}.{lldp_suffix}": "GigabitEthernet0/2"},
+        LLDP_REM_SYS_NAME_OID: {f"{LLDP_REM_SYS_NAME_OID}.{lldp_suffix}": "example-neighbor"},
+        CDP_CACHE_ADDRESS_OID: {f"{CDP_CACHE_ADDRESS_OID}.{cdp_suffix}": "198.51.100.1"},
+        CDP_CACHE_DEVICE_ID_OID: {f"{CDP_CACHE_DEVICE_ID_OID}.{cdp_suffix}": "example-router"},
+        CDP_CACHE_DEVICE_PORT_OID: {
+            f"{CDP_CACHE_DEVICE_PORT_OID}.{cdp_suffix}": "GigabitEthernet0/2"
+        },
+    }
+    return values_by_oid.get(oid, {})
+
+
+def _neighbor_failure_walk(ip: str, config: SnmpConfig, oid: str) -> dict[str, str]:
+    values = _mock_walk(ip, config, oid)
+    if values:
+        return values
+    raise SnmpError("snmp_oid_unsupported")

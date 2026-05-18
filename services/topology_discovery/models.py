@@ -24,6 +24,7 @@ DeviceType = Literal[
 DeviceStatus = Literal["online", "offline", "unknown", "partial"]
 EndpointType = Literal["pc", "laptop", "workstation", "phone", "tablet", "unknown"]
 DeploymentType = Literal["physical", "virtual", "unknown"]
+NeighborProtocol = Literal["lldp", "cdp"]
 
 
 class DiscoveryBaseModel(BaseModel):
@@ -83,6 +84,27 @@ class SnmpInterfaceInfo(DiscoveryBaseModel):
     speed_bps: int | None = None
 
 
+class SnmpNeighborInfo(DiscoveryBaseModel):
+    """Raw neighbor information collected through SNMP topology tables."""
+
+    protocol: NeighborProtocol
+    local_interface_index: int | None = None
+    local_interface_name: str | None = None
+    remote_chassis_id: str | None = None
+    remote_port_id: str | None = None
+    remote_system_name: str | None = None
+    remote_system_description: str | None = None
+    remote_management_address: str | None = None
+    capabilities: str | None = None
+
+    @field_validator("remote_management_address")
+    @classmethod
+    def validate_remote_management_address(cls, value: str | None) -> str | None:
+        if value is not None:
+            ip_address(value)
+        return value
+
+
 class SnmpDeviceInfo(DiscoveryBaseModel):
     """Raw device information collected through SNMP."""
 
@@ -92,6 +114,8 @@ class SnmpDeviceInfo(DiscoveryBaseModel):
     sys_descr: str | None = None
     sys_object_id: str | None = None
     interfaces: list[SnmpInterfaceInfo] = Field(default_factory=list)
+    neighbors: list[SnmpNeighborInfo] = Field(default_factory=list)
+    collection_errors: list[str] = Field(default_factory=list)
     error: str | None = None
 
     @field_validator("ip")

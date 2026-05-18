@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from ipaddress import ip_address, ip_network
 from typing import TypedDict
@@ -14,9 +15,12 @@ from services.topology_discovery.models import (
     DiscoveryError,
     EndpointType,
     InterfaceNode,
+    LinkEdge,
     NetworkSegmentNode,
     SnmpDeviceInfo,
     SnmpInterfaceInfo,
+    SnmpNeighborInfo,
+    SshCommandResult,
     SshDeviceInfo,
     TopologySnapshot,
 )
@@ -38,6 +42,11 @@ SYS_OBJECT_ID_MAPPINGS: tuple[SysObjectIdMapping, ...] = (
         "deployment_type": "unknown",
         "model_family": "net-snmp",
     },
+)
+IP_TOKEN_PATTERN = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+MAC_TOKEN_PATTERN = re.compile(
+    r"\b(?:[0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}\b"
+    r"|\b[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\.[0-9a-fA-F]{4}\b"
 )
 
 
@@ -66,6 +75,12 @@ def build_topology_snapshot(
             for interface in _interfaces_from_snmp_result(snmp_result, started_at)
         ]
     )
+    links = _deduplicate_links(
+        [
+            *_links_from_snmp_neighbors(snmp_results, devices, interfaces, started_at),
+            *_links_from_ssh_tables(resolved_ssh_results, devices, interfaces, started_at),
+        ]
+    )
     errors = (
         _errors_from_alive_hosts(alive_hosts)
         + _errors_from_snmp_results(snmp_results)
@@ -80,7 +95,7 @@ def build_topology_snapshot(
         finished_at=finished_at,
         devices=devices,
         interfaces=interfaces,
-        links=[],
+        links=links,
         network_segments=_network_segments_from_targets(resolved_scan_targets, started_at),
         errors=errors,
     )
@@ -169,7 +184,7 @@ def _errors_from_alive_hosts(alive_hosts: list[AliveHost]) -> list[DiscoveryErro
 
 
 def _errors_from_snmp_results(snmp_results: list[SnmpDeviceInfo]) -> list[DiscoveryError]:
-    return [
+    errors = [
         DiscoveryError(
             target=result.ip,
             stage="snmp",
@@ -179,6 +194,17 @@ def _errors_from_snmp_results(snmp_results: list[SnmpDeviceInfo]) -> list[Discov
         for result in snmp_results
         if not result.success
     ]
+    for result in snmp_results:
+        errors.extend(
+            DiscoveryError(
+                target=result.ip,
+                stage="snmp",
+                message=error,
+                recoverable=True,
+            )
+            for error in result.collection_errors
+        )
+    return errors
 
 
 def _errors_from_ssh_results(ssh_results: list[SshDeviceInfo]) -> list[DiscoveryError]:
@@ -208,6 +234,303 @@ def _deduplicate_interfaces(interfaces: list[InterfaceNode]) -> list[InterfaceNo
     for interface in interfaces:
         by_interface_id.setdefault(interface.interface_id, interface)
     return list(by_interface_id.values())
+
+
+def _deduplicate_links(links: list[LinkEdge]) -> list[LinkEdge]:
+    by_link_id: dict[str, LinkEdge] = {}
+    for link in links:
+        existing = by_link_id.get(link.link_id)
+        if existing is None or link.confidence > existing.confidence:
+            by_link_id[link.link_id] = link
+    return list(by_link_id.values())
+
+
+def _links_from_snmp_neighbors(
+    snmp_results: list[SnmpDeviceInfo],
+    devices: list[DeviceNode],
+    interfaces: list[InterfaceNode],
+    last_seen: datetime,
+) -> list[LinkEdge]:
+    devices_by_ip = {device.ip: device for device in devices}
+    devices_by_hostname = {
+        device.hostname.casefold(): device for device in devices if device.hostname is not None
+    }
+    interfaces_by_device_and_index = {
+        (interface.device_id, interface.if_index): interface
+        for interface in interfaces
+        if interface.if_index is not None
+    }
+    interfaces_by_device_and_name = {
+        (interface.device_id, _normalize_interface_name(interface.name)): interface
+        for interface in interfaces
+    }
+
+    links: list[LinkEdge] = []
+    for result in snmp_results:
+        if not result.success:
+            continue
+        source_device = devices_by_ip.get(result.ip)
+        if source_device is None:
+            continue
+        for neighbor in result.neighbors:
+            target_device = _target_device_from_neighbor(
+                neighbor,
+                devices_by_ip,
+                devices_by_hostname,
+            )
+            if target_device is None or target_device.device_id == source_device.device_id:
+                continue
+            source_interface = (
+                interfaces_by_device_and_index.get(
+                    (source_device.device_id, neighbor.local_interface_index)
+                )
+                if neighbor.local_interface_index is not None
+                else None
+            )
+            target_interface = _target_interface_from_neighbor(
+                target_device,
+                neighbor,
+                interfaces_by_device_and_name,
+            )
+            links.append(
+                LinkEdge(
+                    link_id=_link_id(
+                        source_device,
+                        target_device,
+                        source_interface,
+                        target_interface,
+                    ),
+                    source_device_id=source_device.device_id,
+                    target_device_id=target_device.device_id,
+                    source_interface_id=(
+                        source_interface.interface_id if source_interface is not None else None
+                    ),
+                    target_interface_id=(
+                        target_interface.interface_id if target_interface is not None else None
+                    ),
+                    discovery_method=neighbor.protocol,
+                    confidence=_neighbor_confidence(neighbor),
+                    last_seen=last_seen,
+                )
+            )
+    return links
+
+
+def _links_from_ssh_tables(
+    ssh_results: list[SshDeviceInfo],
+    devices: list[DeviceNode],
+    interfaces: list[InterfaceNode],
+    last_seen: datetime,
+) -> list[LinkEdge]:
+    devices_by_ip = {device.ip: device for device in devices}
+    devices_by_id = {device.device_id: device for device in devices}
+    interfaces_by_mac = {
+        normalized_mac: interface
+        for interface in interfaces
+        if interface.mac_address is not None
+        for normalized_mac in [_normalize_mac_address(interface.mac_address)]
+        if normalized_mac is not None
+    }
+    interfaces_by_device_and_name = {
+        (interface.device_id, _normalize_interface_name(interface.name)): interface
+        for interface in interfaces
+    }
+
+    links: list[LinkEdge] = []
+    for result in ssh_results:
+        if not result.success:
+            continue
+        source_device = devices_by_ip.get(result.ip)
+        if source_device is None:
+            continue
+        for command in result.commands:
+            if not command.success or not command.output:
+                continue
+            command_text = f"{command.name} {command.command}".casefold()
+            if "arp" in command_text:
+                links.extend(
+                    _links_from_arp_table(
+                        command,
+                        source_device,
+                        devices_by_ip,
+                        devices_by_id,
+                        interfaces_by_mac,
+                        last_seen,
+                    )
+                )
+            if "mac" in command_text:
+                links.extend(
+                    _links_from_mac_table(
+                        command,
+                        source_device,
+                        devices_by_id,
+                        interfaces_by_mac,
+                        interfaces_by_device_and_name,
+                        last_seen,
+                    )
+                )
+    return links
+
+
+def _links_from_arp_table(
+    command: SshCommandResult,
+    source_device: DeviceNode,
+    devices_by_ip: dict[str, DeviceNode],
+    devices_by_id: dict[str, DeviceNode],
+    interfaces_by_mac: dict[str, InterfaceNode],
+    last_seen: datetime,
+) -> list[LinkEdge]:
+    links: list[LinkEdge] = []
+    if command.output is None:
+        return links
+    for line in command.output.splitlines():
+        ip_match = IP_TOKEN_PATTERN.search(line)
+        mac_address = _first_mac_address(line)
+        if ip_match is None or mac_address is None:
+            continue
+        target_device = devices_by_ip.get(ip_match.group(0))
+        if target_device is None or target_device.device_id == source_device.device_id:
+            continue
+        target_interface = interfaces_by_mac.get(mac_address)
+        if target_interface is None:
+            continue
+        if target_interface.device_id != target_device.device_id:
+            continue
+        links.append(
+            LinkEdge(
+                link_id=_link_id(source_device, target_device, None, target_interface),
+                source_device_id=source_device.device_id,
+                target_device_id=target_device.device_id,
+                target_interface_id=target_interface.interface_id,
+                discovery_method="arp_table",
+                confidence=0.6,
+                last_seen=last_seen,
+            )
+        )
+    return links
+
+
+def _links_from_mac_table(
+    command: SshCommandResult,
+    source_device: DeviceNode,
+    devices_by_id: dict[str, DeviceNode],
+    interfaces_by_mac: dict[str, InterfaceNode],
+    interfaces_by_device_and_name: dict[tuple[str, str], InterfaceNode],
+    last_seen: datetime,
+) -> list[LinkEdge]:
+    links: list[LinkEdge] = []
+    if command.output is None:
+        return links
+    for line in command.output.splitlines():
+        mac_address = _first_mac_address(line)
+        if mac_address is None:
+            continue
+        target_interface = interfaces_by_mac.get(mac_address)
+        if target_interface is None:
+            continue
+        target_device = devices_by_id.get(target_interface.device_id)
+        if target_device is None or target_device.device_id == source_device.device_id:
+            continue
+        source_interface = _source_interface_from_mac_table_line(
+            line,
+            source_device,
+            interfaces_by_device_and_name,
+        )
+        links.append(
+            LinkEdge(
+                link_id=_link_id(source_device, target_device, source_interface, target_interface),
+                source_device_id=source_device.device_id,
+                target_device_id=target_device.device_id,
+                source_interface_id=(
+                    source_interface.interface_id if source_interface is not None else None
+                ),
+                target_interface_id=target_interface.interface_id,
+                discovery_method="mac_table",
+                confidence=0.7,
+                last_seen=last_seen,
+            )
+        )
+    return links
+
+
+def _target_device_from_neighbor(
+    neighbor: SnmpNeighborInfo,
+    devices_by_ip: dict[str, DeviceNode],
+    devices_by_hostname: dict[str, DeviceNode],
+) -> DeviceNode | None:
+    if neighbor.remote_management_address is not None:
+        target_device = devices_by_ip.get(neighbor.remote_management_address)
+        if target_device is not None:
+            return target_device
+    if neighbor.remote_system_name is None:
+        return None
+    return devices_by_hostname.get(neighbor.remote_system_name.casefold())
+
+
+def _target_interface_from_neighbor(
+    target_device: DeviceNode,
+    neighbor: SnmpNeighborInfo,
+    interfaces_by_device_and_name: dict[tuple[str, str], InterfaceNode],
+) -> InterfaceNode | None:
+    if neighbor.remote_port_id is None:
+        return None
+    return interfaces_by_device_and_name.get(
+        (target_device.device_id, _normalize_interface_name(neighbor.remote_port_id))
+    )
+
+
+def _link_id(
+    source_device: DeviceNode,
+    target_device: DeviceNode,
+    source_interface: InterfaceNode | None,
+    target_interface: InterfaceNode | None,
+) -> str:
+    if source_interface is not None and target_interface is not None:
+        endpoints = sorted([source_interface.interface_id, target_interface.interface_id])
+        return f"link:{endpoints[0]}:{endpoints[1]}"
+    endpoints = sorted([source_device.device_id, target_device.device_id])
+    return f"link:{endpoints[0]}:{endpoints[1]}"
+
+
+def _normalize_interface_name(value: str) -> str:
+    return " ".join(value.casefold().strip().split())
+
+
+def _first_mac_address(value: str) -> str | None:
+    match = MAC_TOKEN_PATTERN.search(value)
+    if match is None:
+        return None
+    return _normalize_mac_address(match.group(0))
+
+
+def _normalize_mac_address(value: str) -> str | None:
+    normalized = "".join(character for character in value.casefold() if character.isalnum())
+    if len(normalized) != 12 or any(
+        character not in "0123456789abcdef" for character in normalized
+    ):
+        return None
+    return normalized
+
+
+def _source_interface_from_mac_table_line(
+    line: str,
+    source_device: DeviceNode,
+    interfaces_by_device_and_name: dict[tuple[str, str], InterfaceNode],
+) -> InterfaceNode | None:
+    columns = line.split()
+    for raw_column in reversed(columns):
+        interface = interfaces_by_device_and_name.get(
+            (source_device.device_id, _normalize_interface_name(raw_column))
+        )
+        if interface is not None:
+            return interface
+    return None
+
+
+def _neighbor_confidence(neighbor: SnmpNeighborInfo) -> float:
+    if neighbor.protocol == "lldp":
+        return 1.0
+    return 0.95
 
 
 def _network_segments_from_targets(
