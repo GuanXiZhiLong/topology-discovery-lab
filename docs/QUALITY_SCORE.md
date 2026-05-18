@@ -88,6 +88,9 @@ tests/
 - `MERGE` 设备节点。
 - `MERGE` 接口节点。
 - `MERGE` 关系。
+- `save_snapshot()` 使用显式 write transaction 保存完整快照。
+- 写入中途失败时事务回滚或不提交。
+- `DiscoveryRun.is_latest` 切换发生在所有节点、关系、offline 标记和 stale 标记之后。
 - 连接失败处理。
 - 不暴露密码。
 

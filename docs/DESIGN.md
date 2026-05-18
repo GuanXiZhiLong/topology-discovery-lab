@@ -732,7 +732,11 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 
 写入必须使用 `MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})` 保证幂等。
 
-保存新的发现运行时，应在设备、关系、网段、接口和链路全部写入成功后，最后将其他 `DiscoveryRun.is_latest` 设置为 `false`，并将当前运行设置为 `true`，用于查询最近一次拓扑状态。保存中途失败时，不应提前清理旧的 latest，也不应把不完整快照标记为 latest。
+保存新的发现运行时，`Neo4jTopologyRepository.save_snapshot()` 应使用单个 Neo4j write transaction 覆盖完整快照写入。事务范围应包括 `DiscoveryRun`、`Device`、`Interface`、`NetworkSegment`、`DISCOVERED_IN`、`HAS_INTERFACE`、`BELONGS_TO_SEGMENT`、`CONNECTED_TO` 写入，以及本次扫描范围内的历史设备 offline 标记和历史链路 stale 标记。
+
+`DiscoveryRun.is_latest` 切换必须在同一事务内作为最后一步执行：应在设备、关系、网段、接口、链路、offline 标记和 stale 标记全部成功后，最后将其他 `DiscoveryRun.is_latest` 设置为 `false`，并将当前运行设置为 `true`，用于查询最近一次拓扑状态。保存中途失败时，事务应回滚，不应留下本次快照的部分写入，不应提前清理旧的 latest，也不应把不完整快照标记为 latest。
+
+Neo4j database selection 兼容策略保持不变：Repository 应优先使用配置中的 `database` 创建 session；如果驱动或 Neo4j 服务端不支持 database selection，可以回退到默认 database session。该 fallback 不应改变 `save_snapshot()` 的单快照事务边界。
 
 ### `DISCOVERED_IN` 关系
 
