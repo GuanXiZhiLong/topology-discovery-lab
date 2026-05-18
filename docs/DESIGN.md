@@ -822,6 +822,20 @@ SET d.ip = $ip,
 (:Device)-[:CONNECTED_TO]->(:Device)
 ```
 
+`CONNECTED_TO` 关系属性：
+
+| 属性 | 说明 |
+| --- | --- |
+| `link_id` | 稳定链路 ID |
+| `discovery_method` | 链路发现方式 |
+| `confidence` | 链路置信度 |
+| `last_seen` | 最近一次发现时间 |
+| `status` | 链路状态，当前允许 `active`、`stale` |
+
+本次快照发现到的链路应写入 `status = "active"`。当本次快照包含链路结果且包含扫描网段信息时，不在当前 `link_id` 集合中、并且至少一端属于本次扫描涉及 `NetworkSegment` 设备范围的历史 `CONNECTED_TO` 关系可以标记为 `status = "stale"`。如果本次快照没有任何链路结果，或无法确定本次扫描涉及的网段范围，不应批量将历史链路标记为 stale。
+
+Repository 可以提供查询最新拓扑聚合状态的最小接口，基于 `DiscoveryRun {is_latest: true}` 返回设备、接口和 active 链路数量。该查询不应读取配置文件或执行扫描。
+
 ## 核心接口
 
 ```python

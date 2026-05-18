@@ -31,15 +31,16 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
 
     repository.save_snapshot(snapshot)
 
-    assert len(driver.session_obj.runs) == 9
+    assert len(driver.session_obj.runs) == 13
     run_query, run_params = driver.session_obj.runs[0]
     device_query, device_params = driver.session_obj.runs[1]
     first_run_link_query, first_run_link_params = driver.session_obj.runs[2]
     second_device_query, _ = driver.session_obj.runs[3]
-    interface_query, interface_params = driver.session_obj.runs[5]
-    interface_link_query, interface_link_params = driver.session_obj.runs[6]
-    device_link_query, device_link_params = driver.session_obj.runs[7]
-    latest_query, latest_params = driver.session_obj.runs[8]
+    interface_query, interface_params = driver.session_obj.runs[8]
+    interface_link_query, interface_link_params = driver.session_obj.runs[9]
+    device_link_query, device_link_params = driver.session_obj.runs[10]
+    stale_query, stale_params = driver.session_obj.runs[11]
+    latest_query, latest_params = driver.session_obj.runs[12]
 
     assert "MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})" in run_query
     assert "is_latest" not in run_query
@@ -55,9 +56,17 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
     assert "MERGE (source)-[r:CONNECTED_TO {link_id: $link_id}]->(target)" in (
         interface_link_query
     )
+    assert "r.status = 'active'" in interface_link_query
     assert "MERGE (source)-[r:CONNECTED_TO {link_id: $link_id}]->(target)" in (
         device_link_query
     )
+    assert "r.status = 'active'" in device_link_query
+    assert "MATCH (d:Device)-[:BELONGS_TO_SEGMENT]->(s:NetworkSegment)" in stale_query
+    assert "s.segment_id IN $segment_ids" in stale_query
+    assert "NOT r.link_id IN $link_ids" in stale_query
+    assert "SET r.status = 'stale'" in stale_query
+    assert stale_params["link_ids"] == ["link:interface-a:interface-b", "link:device-a:device-b"]
+    assert stale_params["segment_ids"] == ["segment:192.0.2.0/24"]
     assert "MATCH (current:DiscoveryRun {snapshot_id: $snapshot_id})" in latest_query
     assert "current.is_latest = true" in latest_query
     assert "other.is_latest = false" in latest_query
@@ -184,6 +193,7 @@ def test_save_snapshot_does_not_mark_missing_devices_offline_without_segments() 
 
     queries = [query for query, _ in driver.session_obj.runs]
     assert all("SET d.status = 'offline'" not in query for query in queries)
+    assert all("SET r.status = 'stale'" not in query for query in queries)
 
 
 def test_save_snapshot_writes_discovery_run_and_device_memberships() -> None:
@@ -279,6 +289,7 @@ def test_save_snapshot_normalizes_reversed_device_link_endpoints() -> None:
     params = driver.session_obj.runs[1][1]
     assert params["source_device_id"] == "device:192.0.2.1"
     assert params["target_device_id"] == "device:198.51.100.1"
+    assert "r.status = 'active'" in driver.session_obj.runs[1][0]
 
 
 def test_save_snapshot_normalizes_reversed_interface_link_endpoints() -> None:
@@ -308,6 +319,83 @@ def test_save_snapshot_normalizes_reversed_interface_link_endpoints() -> None:
     assert params["target_interface_id"] == "interface:device:198.51.100.1:1"
     assert params["source_device_id"] == "device:192.0.2.1"
     assert params["target_device_id"] == "device:198.51.100.1"
+    assert "r.status = 'active'" in driver.session_obj.runs[1][0]
+
+
+def test_save_snapshot_marks_missing_links_stale_when_links_are_present() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        started_at=NOW,
+        links=[
+            LinkEdge(
+                link_id="link:device-a:device-b",
+                source_device_id="device:192.0.2.1",
+                target_device_id="device:198.51.100.1",
+                discovery_method="ip_subnet",
+                confidence=0.3,
+                last_seen=NOW,
+            )
+        ],
+        network_segments=[
+            NetworkSegmentNode(
+                segment_id="segment:192.0.2.0/24",
+                target="192.0.2.0/24",
+                cidr="192.0.2.0/24",
+                source="config",
+                last_seen=NOW,
+            )
+        ],
+    )
+
+    repository.save_snapshot(snapshot)
+
+    stale_query, stale_params = driver.session_obj.runs[4]
+    assert "MATCH (d:Device)-[:BELONGS_TO_SEGMENT]->(s:NetworkSegment)" in stale_query
+    assert "s.segment_id IN $segment_ids" in stale_query
+    assert "coalesce(source.device_id, source_device.device_id)" in stale_query
+    assert "coalesce(target.device_id, target_device.device_id)" in stale_query
+    assert "WHERE NOT r.link_id IN $link_ids" in stale_query
+    assert "SET r.status = 'stale'" in stale_query
+    assert stale_params == {
+        "link_ids": ["link:device-a:device-b"],
+        "segment_ids": ["segment:192.0.2.0/24"],
+    }
+
+
+def test_save_snapshot_does_not_mark_links_stale_without_segments() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        started_at=NOW,
+        links=[
+            LinkEdge(
+                link_id="link:device-a:device-b",
+                source_device_id="device:192.0.2.1",
+                target_device_id="device:198.51.100.1",
+                discovery_method="ip_subnet",
+                confidence=0.3,
+                last_seen=NOW,
+            )
+        ],
+    )
+
+    repository.save_snapshot(snapshot)
+
+    queries = [query for query, _ in driver.session_obj.runs]
+    assert all("SET r.status = 'stale'" not in query for query in queries)
+
+
+def test_save_snapshot_does_not_mark_all_links_stale_when_snapshot_has_no_links() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+
+    repository.save_snapshot(TopologySnapshot(snapshot_id="snapshot-1", started_at=NOW))
+
+    queries = [query for query, _ in driver.session_obj.runs]
+    assert all("SET r.status = 'stale'" not in query for query in queries)
 
 
 def test_connect_failure_is_sanitized() -> None:
@@ -332,6 +420,43 @@ def test_close_closes_driver() -> None:
     repository.close()
 
     assert driver.closed is True
+
+
+def test_fetch_latest_topology_counts_returns_latest_run_counts() -> None:
+    driver = LatestCountsDriver(
+        [
+            {
+                "devices": 2,
+                "interfaces": 3,
+                "active_links": 1,
+            }
+        ]
+    )
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+
+    counts = repository.fetch_latest_topology_counts()
+
+    query, params = driver.session_obj.runs[0]
+    assert "MATCH (r:DiscoveryRun {is_latest: true})" in query
+    assert params == {}
+    assert counts == {
+        "devices": 2,
+        "interfaces": 3,
+        "active_links": 1,
+    }
+
+
+def test_fetch_latest_topology_counts_returns_zeroes_without_latest_run() -> None:
+    driver = LatestCountsDriver([])
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+
+    counts = repository.fetch_latest_topology_counts()
+
+    assert counts == {
+        "devices": 0,
+        "interfaces": 0,
+        "active_links": 0,
+    }
 
 
 def _config(password: str = "dummy-password", database: str = "neo4j") -> Neo4jConfig:
@@ -393,6 +518,15 @@ def _snapshot() -> TopologySnapshot:
         devices=[device, target],
         interfaces=[interface],
         links=[interface_link, device_link],
+        network_segments=[
+            NetworkSegmentNode(
+                segment_id="segment:192.0.2.0/24",
+                target="192.0.2.0/24",
+                cidr="192.0.2.0/24",
+                source="config",
+                last_seen=NOW,
+            )
+        ],
     )
 
 
@@ -444,6 +578,22 @@ class FailingOnDeviceUpsertSession(FakeSession):
         if "MERGE (d:Device {device_id: $device_id})" in query:
             raise RuntimeError("device upsert failed")
         return super().run(query, parameters)
+
+
+class LatestCountsDriver(FakeDriver):
+    def __init__(self, records: list[dict[str, int]]) -> None:
+        super().__init__()
+        self.session_obj = LatestCountsSession(records)
+
+
+class LatestCountsSession(FakeSession):
+    def __init__(self, records: list[dict[str, int]]) -> None:
+        super().__init__()
+        self.records = records
+
+    def run(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
+        self.runs.append((query, parameters or {}))
+        return self.records
 
 
 class DatabaseSelectionUnsupportedDriver(FakeDriver):
