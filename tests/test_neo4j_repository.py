@@ -31,16 +31,16 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
 
     repository.save_snapshot(snapshot)
 
-    assert len(driver.session_obj.runs) == 10
+    assert len(driver.session_obj.runs) == 13
     run_query, run_params = driver.session_obj.runs[0]
     device_query, device_params = driver.session_obj.runs[1]
     first_run_link_query, first_run_link_params = driver.session_obj.runs[2]
     second_device_query, _ = driver.session_obj.runs[3]
-    interface_query, interface_params = driver.session_obj.runs[5]
-    interface_link_query, interface_link_params = driver.session_obj.runs[6]
-    device_link_query, device_link_params = driver.session_obj.runs[7]
-    stale_query, stale_params = driver.session_obj.runs[8]
-    latest_query, latest_params = driver.session_obj.runs[9]
+    interface_query, interface_params = driver.session_obj.runs[8]
+    interface_link_query, interface_link_params = driver.session_obj.runs[9]
+    device_link_query, device_link_params = driver.session_obj.runs[10]
+    stale_query, stale_params = driver.session_obj.runs[11]
+    latest_query, latest_params = driver.session_obj.runs[12]
 
     assert "MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})" in run_query
     assert "is_latest" not in run_query
@@ -61,8 +61,12 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
         device_link_query
     )
     assert "r.status = 'active'" in device_link_query
+    assert "MATCH (d:Device)-[:BELONGS_TO_SEGMENT]->(s:NetworkSegment)" in stale_query
+    assert "s.segment_id IN $segment_ids" in stale_query
+    assert "NOT r.link_id IN $link_ids" in stale_query
     assert "SET r.status = 'stale'" in stale_query
     assert stale_params["link_ids"] == ["link:interface-a:interface-b", "link:device-a:device-b"]
+    assert stale_params["segment_ids"] == ["segment:192.0.2.0/24"]
     assert "MATCH (current:DiscoveryRun {snapshot_id: $snapshot_id})" in latest_query
     assert "current.is_latest = true" in latest_query
     assert "other.is_latest = false" in latest_query
@@ -334,15 +338,54 @@ def test_save_snapshot_marks_missing_links_stale_when_links_are_present() -> Non
                 last_seen=NOW,
             )
         ],
+        network_segments=[
+            NetworkSegmentNode(
+                segment_id="segment:192.0.2.0/24",
+                target="192.0.2.0/24",
+                cidr="192.0.2.0/24",
+                source="config",
+                last_seen=NOW,
+            )
+        ],
     )
 
     repository.save_snapshot(snapshot)
 
-    stale_query, stale_params = driver.session_obj.runs[2]
-    assert "MATCH ()-[r:CONNECTED_TO]->()" in stale_query
+    stale_query, stale_params = driver.session_obj.runs[4]
+    assert "MATCH (d:Device)-[:BELONGS_TO_SEGMENT]->(s:NetworkSegment)" in stale_query
+    assert "s.segment_id IN $segment_ids" in stale_query
+    assert "coalesce(source.device_id, source_device.device_id)" in stale_query
+    assert "coalesce(target.device_id, target_device.device_id)" in stale_query
     assert "WHERE NOT r.link_id IN $link_ids" in stale_query
     assert "SET r.status = 'stale'" in stale_query
-    assert stale_params == {"link_ids": ["link:device-a:device-b"]}
+    assert stale_params == {
+        "link_ids": ["link:device-a:device-b"],
+        "segment_ids": ["segment:192.0.2.0/24"],
+    }
+
+
+def test_save_snapshot_does_not_mark_links_stale_without_segments() -> None:
+    driver = FakeDriver()
+    repository = Neo4jTopologyRepository(_config(), driver_factory=_factory(driver))
+    snapshot = TopologySnapshot(
+        snapshot_id="snapshot-1",
+        started_at=NOW,
+        links=[
+            LinkEdge(
+                link_id="link:device-a:device-b",
+                source_device_id="device:192.0.2.1",
+                target_device_id="device:198.51.100.1",
+                discovery_method="ip_subnet",
+                confidence=0.3,
+                last_seen=NOW,
+            )
+        ],
+    )
+
+    repository.save_snapshot(snapshot)
+
+    queries = [query for query, _ in driver.session_obj.runs]
+    assert all("SET r.status = 'stale'" not in query for query in queries)
 
 
 def test_save_snapshot_does_not_mark_all_links_stale_when_snapshot_has_no_links() -> None:
@@ -475,6 +518,15 @@ def _snapshot() -> TopologySnapshot:
         devices=[device, target],
         interfaces=[interface],
         links=[interface_link, device_link],
+        network_segments=[
+            NetworkSegmentNode(
+                segment_id="segment:192.0.2.0/24",
+                target="192.0.2.0/24",
+                cidr="192.0.2.0/24",
+                source="config",
+                last_seen=NOW,
+            )
+        ],
     )
 
 
