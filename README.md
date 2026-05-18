@@ -150,6 +150,12 @@ Copy-Item config/config.example.yaml config/config.yaml
 conda run -n topology-discovery-lab python -m services.topology_discovery.main --config config/config.yaml
 ```
 
+查询最近一次已写入拓扑的聚合计数，不执行扫描：
+
+```powershell
+conda run -n topology-discovery-lab python -m services.topology_discovery.main --config config/config.yaml --latest-counts
+```
+
 程序只输出聚合统计，不输出完整配置、密码、SNMP community 或 SSH 凭据。
 
 当前阶段 SSH 默认关闭。启用 SSH 前应确认配置中的命令均为只读命令，例如 `show version` 或 `show lldp neighbors detail`。

@@ -11,7 +11,13 @@ from services.topology_discovery.config import (
     SnmpConfig,
     SshConfig,
 )
-from services.topology_discovery.main import DiscoverySummary, main, run_discovery
+from services.topology_discovery.main import (
+    DiscoverySummary,
+    LatestTopologyCounts,
+    fetch_latest_topology_counts,
+    main,
+    run_discovery,
+)
 from services.topology_discovery.models import (
     AliveHost,
     SnmpDeviceInfo,
@@ -125,6 +131,41 @@ def test_run_discovery_closes_repository_when_save_fails() -> None:
     assert repository.closed is True
 
 
+def test_fetch_latest_topology_counts_returns_counts_and_closes_repository() -> None:
+    repository = FakeRepository(
+        latest_counts={
+            "devices": 2,
+            "interfaces": 3,
+            "active_links": 1,
+        }
+    )
+
+    counts = fetch_latest_topology_counts(
+        _config(),
+        repository_factory=lambda config: repository,
+    )
+
+    assert counts == LatestTopologyCounts(
+        devices=2,
+        interfaces=3,
+        active_links=1,
+    )
+    assert repository.saved_snapshot is None
+    assert repository.closed is True
+
+
+def test_fetch_latest_topology_counts_closes_repository_when_query_fails() -> None:
+    repository = FakeRepository(query_error=RuntimeError("query failed"))
+
+    with pytest.raises(RuntimeError):
+        fetch_latest_topology_counts(
+            _config(),
+            repository_factory=lambda config: repository,
+        )
+
+    assert repository.closed is True
+
+
 def test_main_returns_success_and_prints_summary(
     monkeypatch: Any,
     capsys: Any,
@@ -150,6 +191,28 @@ def test_main_returns_success_and_prints_summary(
     assert "discovery completed" in capsys.readouterr().out
 
 
+def test_main_returns_success_and_prints_latest_counts(
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    monkeypatch.setattr("services.topology_discovery.main.load_config", lambda path: _config())
+    monkeypatch.setattr(
+        "services.topology_discovery.main.fetch_latest_topology_counts",
+        lambda config: LatestTopologyCounts(
+            devices=2,
+            interfaces=3,
+            active_links=1,
+        ),
+    )
+
+    exit_code = main(["--config", "config/config.example.yaml", "--latest-counts"])
+
+    assert exit_code == 0
+    assert capsys.readouterr().out.strip() == (
+        "latest topology counts: devices=2, interfaces=3, active_links=1"
+    )
+
+
 def test_main_returns_failure_for_config_error(
     monkeypatch: Any,
     capsys: Any,
@@ -163,6 +226,24 @@ def test_main_returns_failure_for_config_error(
 
     assert exit_code == 1
     assert "dummy-password" not in capsys.readouterr().err
+
+
+def test_main_returns_failure_for_latest_counts_repository_error(
+    monkeypatch: Any,
+    capsys: Any,
+) -> None:
+    monkeypatch.setattr("services.topology_discovery.main.load_config", lambda path: _config())
+    monkeypatch.setattr(
+        "services.topology_discovery.main.fetch_latest_topology_counts",
+        _raise_latest_counts_error,
+    )
+
+    exit_code = main(["--latest-counts"])
+
+    assert exit_code == 1
+    stderr = capsys.readouterr().err
+    assert "failed to fetch latest topology counts" in stderr
+    assert "dummy-password" not in stderr
 
 
 def _config(ssh_enabled: bool = False) -> AppConfig:
@@ -236,9 +317,26 @@ def _raise_config_error(path: str) -> None:
     raise ConfigError("invalid config fields: neo4j.password")
 
 
+def _raise_latest_counts_error(config: AppConfig) -> None:
+    from services.topology_discovery.neo4j_repository import Neo4jRepositoryError
+
+    raise Neo4jRepositoryError("failed to fetch latest topology counts")
+
+
 class FakeRepository:
-    def __init__(self, save_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        save_error: Exception | None = None,
+        query_error: Exception | None = None,
+        latest_counts: dict[str, int] | None = None,
+    ) -> None:
         self.save_error = save_error
+        self.query_error = query_error
+        self.latest_counts = latest_counts or {
+            "devices": 0,
+            "interfaces": 0,
+            "active_links": 0,
+        }
         self.saved_snapshot: TopologySnapshot | None = None
         self.closed = False
 
@@ -246,6 +344,11 @@ class FakeRepository:
         if self.save_error is not None:
             raise self.save_error
         self.saved_snapshot = snapshot
+
+    def fetch_latest_topology_counts(self) -> dict[str, int]:
+        if self.query_error is not None:
+            raise self.query_error
+        return self.latest_counts
 
     def close(self) -> None:
         self.closed = True

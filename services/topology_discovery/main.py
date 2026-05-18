@@ -42,6 +42,9 @@ class TopologyRepository(Protocol):
     def save_snapshot(self, snapshot: TopologySnapshot) -> None:
         """Persist a topology snapshot."""
 
+    def fetch_latest_topology_counts(self) -> dict[str, int]:
+        """Fetch aggregate counts for the latest persisted topology."""
+
     def close(self) -> None:
         """Close repository resources."""
 
@@ -64,6 +67,15 @@ class DiscoverySummary:
     interfaces: int
     links: int
     errors: int
+
+
+@dataclass(frozen=True)
+class LatestTopologyCounts:
+    """Aggregate counts for the latest persisted topology."""
+
+    devices: int
+    interfaces: int
+    active_links: int
 
 
 def run_discovery(
@@ -107,6 +119,25 @@ def run_discovery(
         interfaces=len(snapshot.interfaces),
         links=len(snapshot.links),
         errors=len(snapshot.errors),
+    )
+
+
+def fetch_latest_topology_counts(
+    config: AppConfig,
+    repository_factory: RepositoryFactory = Neo4jTopologyRepository,
+) -> LatestTopologyCounts:
+    """Fetch aggregate counts for the latest persisted topology without scanning."""
+
+    repository = repository_factory(config.neo4j)
+    try:
+        counts = repository.fetch_latest_topology_counts()
+    finally:
+        repository.close()
+
+    return LatestTopologyCounts(
+        devices=counts["devices"],
+        interfaces=counts["interfaces"],
+        active_links=counts["active_links"],
     )
 
 
@@ -183,16 +214,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=DEFAULT_CONFIG_PATH,
         help="Path to YAML configuration file.",
     )
+    parser.add_argument(
+        "--latest-counts",
+        action="store_true",
+        help="Print aggregate counts for the latest persisted topology without scanning.",
+    )
     args = parser.parse_args(argv)
 
     try:
         config = load_config(args.config)
-        summary = run_discovery(config)
+        if args.latest_counts:
+            latest_counts = fetch_latest_topology_counts(config)
+        else:
+            summary = run_discovery(config)
     except (ConfigError, Neo4jRepositoryError) as exc:
         print(f"discovery failed: {exc}", file=sys.stderr)
         return 1
 
-    print(_format_summary(summary))
+    if args.latest_counts:
+        print(_format_latest_topology_counts(latest_counts))
+    else:
+        print(_format_summary(summary))
     return 0
 
 
@@ -207,6 +249,15 @@ def _format_summary(summary: DiscoverySummary) -> str:
         f"interfaces={summary.interfaces}, "
         f"links={summary.links}, "
         f"errors={summary.errors}"
+    )
+
+
+def _format_latest_topology_counts(counts: LatestTopologyCounts) -> str:
+    return (
+        "latest topology counts: "
+        f"devices={counts.devices}, "
+        f"interfaces={counts.interfaces}, "
+        f"active_links={counts.active_links}"
     )
 
 
