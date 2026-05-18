@@ -716,6 +716,35 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 - `DISCOVERED_IN`
 - `BELONGS_TO_SEGMENT`
 
+### `DiscoveryRun` 节点属性
+
+| 属性 | 说明 |
+| --- | --- |
+| `snapshot_id` | 一次拓扑发现结果的唯一 ID |
+| `scan_targets` | 本次扫描使用的原始目标列表 |
+| `started_at` | 本次扫描开始时间 |
+| `finished_at` | 本次扫描结束时间，可以为空 |
+| `device_count` | 本次快照中的设备数量 |
+| `interface_count` | 本次快照中的接口数量 |
+| `link_count` | 本次快照中的链路数量 |
+| `error_count` | 本次快照中的错误数量 |
+
+写入必须使用 `MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})` 保证幂等。
+
+### `DISCOVERED_IN` 关系
+
+结构：
+
+```cypher
+(:Device)-[:DISCOVERED_IN]->(:DiscoveryRun)
+```
+
+含义：
+
+1. 记录设备在哪次发现运行中出现。
+2. 重复保存同一个 `snapshot_id` 不应重复创建关系。
+3. 后续增量更新可以基于最近一次 `DiscoveryRun` 判断设备、接口或链路是否 stale。
+
 ### `NetworkSegment` 节点属性
 
 | 属性 | 说明 |
