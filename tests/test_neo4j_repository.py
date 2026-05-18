@@ -31,6 +31,10 @@ def test_save_snapshot_uses_parameterized_merge_queries() -> None:
 
     repository.save_snapshot(snapshot)
 
+    assert len(driver.session_obj.transactions) == 1
+    assert driver.session_obj.transactions[0].committed is True
+    assert driver.session_obj.transactions[0].rolled_back is False
+    assert len(driver.session_obj.transactions[0].runs) == 13
     assert len(driver.session_obj.runs) == 13
     run_query, run_params = driver.session_obj.runs[0]
     device_query, device_params = driver.session_obj.runs[1]
@@ -119,6 +123,8 @@ def test_save_snapshot_falls_back_to_default_database_when_selection_is_unsuppor
     )
 
     assert driver.session_databases == ["neo4j", None]
+    assert len(driver.session_obj.transactions) == 1
+    assert driver.session_obj.transactions[0].committed is True
 
 
 def test_save_snapshot_writes_network_segments_and_memberships() -> None:
@@ -264,6 +270,9 @@ def test_save_snapshot_does_not_switch_latest_before_later_write_failure() -> No
     queries = [query for query, _ in driver.session_obj.runs]
     assert any("MERGE (r:DiscoveryRun {snapshot_id: $snapshot_id})" in query for query in queries)
     assert all("is_latest" not in query for query in queries)
+    assert len(driver.session_obj.transactions) == 1
+    assert driver.session_obj.transactions[0].committed is False
+    assert driver.session_obj.transactions[0].rolled_back is True
 
 
 def test_save_snapshot_normalizes_reversed_device_link_endpoints() -> None:
@@ -533,6 +542,7 @@ def _snapshot() -> TopologySnapshot:
 class FakeSession:
     def __init__(self) -> None:
         self.runs: list[tuple[str, dict[str, Any]]] = []
+        self.transactions: list[FakeTransaction] = []
 
     def __enter__(self) -> FakeSession:
         return self
@@ -543,6 +553,30 @@ class FakeSession:
     def run(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
         self.runs.append((query, parameters or {}))
         return None
+
+    def begin_transaction(self) -> FakeTransaction:
+        transaction = FakeTransaction(self)
+        self.transactions.append(transaction)
+        return transaction
+
+
+class FakeTransaction:
+    def __init__(self, session: FakeSession) -> None:
+        self._session = session
+        self.runs: list[tuple[str, dict[str, Any]]] = []
+        self.committed = False
+        self.rolled_back = False
+
+    def run(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
+        resolved_parameters = parameters or {}
+        self.runs.append((query, resolved_parameters))
+        return self._session.run(query, resolved_parameters)
+
+    def commit(self) -> None:
+        self.committed = True
+
+    def rollback(self) -> None:
+        self.rolled_back = True
 
 
 class FakeDriver:
@@ -610,6 +644,11 @@ class DatabaseSelectionUnsupportedDriver(FakeDriver):
 
 
 class DatabaseSelectionUnsupportedSession(FakeSession):
+    def begin_transaction(self) -> FakeTransaction:
+        raise ConfigurationError(
+            "Database name parameter for selecting database is not supported"
+        )
+
     def run(self, query: str, parameters: dict[str, Any] | None = None) -> Any:
         raise ConfigurationError(
             "Database name parameter for selecting database is not supported"
