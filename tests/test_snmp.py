@@ -52,7 +52,7 @@ def test_collect_snmp_device_info_collects_lldp_and_cdp_neighbors() -> None:
 
     assert result.success is True
     assert [neighbor.protocol for neighbor in result.neighbors] == ["lldp", "cdp"]
-    assert result.neighbors[0].local_interface_index == 1
+    assert result.neighbors[0].local_interface_index is None
     assert result.neighbors[0].remote_system_name == "example-neighbor"
     assert result.neighbors[1].remote_management_address == "198.51.100.1"
 

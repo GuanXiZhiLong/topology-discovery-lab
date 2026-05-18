@@ -352,6 +352,7 @@ def _links_from_ssh_tables(
                     _links_from_arp_table(
                         command,
                         source_device,
+                        devices_by_ip,
                         devices_by_id,
                         interfaces_by_mac,
                         last_seen,
@@ -374,6 +375,7 @@ def _links_from_ssh_tables(
 def _links_from_arp_table(
     command: SshCommandResult,
     source_device: DeviceNode,
+    devices_by_ip: dict[str, DeviceNode],
     devices_by_id: dict[str, DeviceNode],
     interfaces_by_mac: dict[str, InterfaceNode],
     last_seen: datetime,
@@ -386,11 +388,13 @@ def _links_from_arp_table(
         mac_address = _first_mac_address(line)
         if ip_match is None or mac_address is None:
             continue
+        target_device = devices_by_ip.get(ip_match.group(0))
+        if target_device is None or target_device.device_id == source_device.device_id:
+            continue
         target_interface = interfaces_by_mac.get(mac_address)
         if target_interface is None:
             continue
-        target_device = devices_by_id.get(target_interface.device_id)
-        if target_device is None or target_device.device_id == source_device.device_id:
+        if target_interface.device_id != target_device.device_id:
             continue
         links.append(
             LinkEdge(

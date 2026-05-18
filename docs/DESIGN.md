@@ -543,6 +543,7 @@ SnmpDeviceInfo.collection_errors: list[str]
 6. CDP 生成链路时 `discovery_method = "cdp"`，`confidence = 0.95`。
 7. 当本端接口索引和远端端口名都能匹配已发现接口时，应生成接口级链路。
 8. 链路 ID 优先基于排序后的接口 ID；接口不足时回退到排序后的设备 ID，避免 A 到 B 和 B 到 A 重复写入。
+9. LLDP remote table 的 `localPortNum` 不等同于 IF-MIB `ifIndex`，不能直接用作本端接口索引；无法可靠映射时只能生成设备级或单侧接口链路。
 
 ## SSH 采集设计
 
@@ -697,6 +698,7 @@ SSH 只作为补充采集方式，默认关闭，只允许执行只读命令。
 4. ARP 表推断链路使用 `discovery_method = "arp_table"`，`confidence = 0.6`。
 5. MAC 地址表推断链路使用 `discovery_method = "mac_table"`，`confidence = 0.7`。
 6. 当同一链路已有 LLDP/CDP 高置信结果时，低置信 ARP/MAC 推断不得覆盖。
+7. ARP 表推断必须同时满足 ARP IP 命中已发现目标设备，且 ARP MAC 匹配该目标设备接口；只命中 MAC 但 IP 不一致时不得写入确认链路。
 
 ## Neo4j 图模型
 

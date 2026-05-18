@@ -183,7 +183,6 @@ def _collect_lldp_neighbors(
         neighbors.append(
             SnmpNeighborInfo(
                 protocol="lldp",
-                local_interface_index=_lldp_local_port_from_suffix(suffix),
                 remote_chassis_id=chassis_ids.get(f"{LLDP_REM_CHASSIS_ID_OID}.{suffix}"),
                 remote_port_id=port_ids.get(f"{LLDP_REM_PORT_ID_OID}.{suffix}"),
                 remote_system_name=remote_name,
@@ -322,13 +321,6 @@ def _table_suffix(oid: str, base_oid: str) -> str | None:
         return None
     suffix = oid.removeprefix(prefix)
     return suffix or None
-
-
-def _lldp_local_port_from_suffix(suffix: str) -> int | None:
-    parts = suffix.split(".")
-    if len(parts) < 2:
-        return None
-    return _parse_int(parts[1])
 
 
 def _cdp_local_interface_from_suffix(suffix: str) -> int | None:

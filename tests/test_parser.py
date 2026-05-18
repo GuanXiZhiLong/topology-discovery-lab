@@ -271,6 +271,36 @@ def test_build_topology_snapshot_creates_lldp_link_from_neighbor_system_name() -
     assert snapshot.links[0].confidence == 1.0
 
 
+def test_build_topology_snapshot_does_not_treat_lldp_local_port_as_if_index() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(
+                ip="192.0.2.1",
+                interfaces=[_snmp_interface(if_index=100, name="GigabitEthernet0/1")],
+                neighbors=[
+                    SnmpNeighborInfo(
+                        protocol="lldp",
+                        local_interface_index=None,
+                        remote_port_id="GigabitEthernet0/2",
+                        remote_system_name="example-router",
+                    )
+                ],
+            ),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_name="example-router",
+                sys_descr="Example Router",
+                interfaces=[_snmp_interface(if_index=2, name="GigabitEthernet0/2")],
+            ),
+        ],
+    )
+
+    assert len(snapshot.links) == 1
+    assert snapshot.links[0].source_interface_id is None
+    assert snapshot.links[0].target_interface_id == "interface:device:198.51.100.1:2"
+
+
 def test_build_topology_snapshot_deduplicates_neighbor_links_preferring_higher_confidence() -> None:
     snapshot = build_topology_snapshot(
         alive_hosts=[],
@@ -411,6 +441,45 @@ def test_build_topology_snapshot_creates_arp_table_link_to_known_device() -> Non
     assert snapshot.links[0].target_interface_id == "interface:device:198.51.100.1:2"
     assert snapshot.links[0].discovery_method == "arp_table"
     assert snapshot.links[0].confidence == 0.6
+
+
+def test_build_topology_snapshot_ignores_arp_entry_when_ip_does_not_match_mac_device() -> None:
+    snapshot = build_topology_snapshot(
+        alive_hosts=[],
+        snmp_results=[
+            _snmp_result(ip="192.0.2.1"),
+            _snmp_result(
+                ip="198.51.100.1",
+                sys_descr="Example Router",
+                interfaces=[
+                    _snmp_interface(
+                        if_index=2,
+                        name="GigabitEthernet0/2",
+                        mac_address="00:11:22:33:44:55",
+                    )
+                ],
+            ),
+        ],
+        ssh_results=[
+            SshDeviceInfo(
+                ip="192.0.2.1",
+                success=True,
+                commands=[
+                    SshCommandResult(
+                        name="show_ip_arp",
+                        command="show ip arp",
+                        success=True,
+                        output=(
+                            "Protocol Address Age (min) Hardware Addr Type Interface\n"
+                            "Internet 203.0.113.1 0 0011.2233.4455 ARPA Vlan1"
+                        ),
+                    )
+                ],
+            )
+        ],
+    )
+
+    assert snapshot.links == []
 
 
 def test_build_topology_snapshot_creates_mac_table_interface_link_to_known_device() -> None:
